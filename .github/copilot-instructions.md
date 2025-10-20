@@ -41,6 +41,8 @@
 - When adding debug output, keep it optional, lightweight, and safe; prefer using the existing logger.
 - Proceed with deletes and renames as instructed, without confirmation.
 - Do NOT implement fallbacks.
+ - Keep the existing README structure; only add/change details within current sections. Ask before removing or adding sections.
+ - Use the README to document outputs and usage only; do not use it to change project inputs or behavior.
 
 ## Communication
 - Avoid repetition of instructions or disclaimers.
