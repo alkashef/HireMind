@@ -1,61 +1,48 @@
-You are GitHub Copilot, my AI coding assistant for rapid prototyping in Python.
+﻿You are GitHub Copilot, my AI coding assistant for rapid prototyping in Python.
 
-## Libraries
-- Use **HTML, JS, and CSS** for the app frontend.
-- Use **Flask** to connect the frontend with the backend.
-- The backend app is in **Python**.
+## Stack & Environment
+- Frontend: **HTML, JS, and CSS**
+- Backend: **Python** with **Flask**
+- ALWAYS update `requirements.txt` and `README.md` after each code edit.
+- Keep all configurations in `config/.env`.
+- Maintain `config/.env-example` with the same structure as `config/.env`, but use placeholders for secrets.
+- Ignore the `archive` folder.
+- Use standard libraries or popular ones (e.g., pandas, requests, langchain, openai).
+- Match library usage to the versions specified in `requirements.txt`.
+- For OpenAI SDK (openai>=1.30), use the modern client: `from openai import OpenAI` and `client.chat.completions.create(...)`.
 
-## Development Context
+## Code Style & Behavior
+- Follow Pythonic style, adhering to PEP 8 standards.
+- Use f-Strings, Context Managers, list comprehensions, and Type Annotations.
+- Add comments and docstrings for clarity.
+- Place all imports at the beginning of the script.
+- Keep functions short, modular, and readable.
+- Avoid unnecessary boilerplate or abstractions.
+- Avoid using try-except blocks unless absolutely necessary. When catching exceptions, log actionable messages and avoid swallowing errors.
+- Reuse existing functions or classes when possible.
+- Always encapsulate new functionality in methods.
+- Avoid redundancy and keep the code concise.
+- Do **NOT** implement tests.
+- Use a logger to log all details to the file specified in `LOG_FILE_PATH` from the `.env` file. Precede each log entry with a `[TIMESTAMP]` using the local computer clock.
+
+## Development Approach
 - Code is experimental and iterative; designs change frequently.
 - Common components: data pipelines, API calling LLM/GPT, lightweight UI.
 - Prioritize fast feedback, working code, and flexibility over strict architecture.
-
-## Coding Style
-- Follow Pythonic style, but be pragmatic—clarity and speed over perfection.
-- Adhere to PEP 8 Standards.
-- Use f-Strings.
-- Employ Context Managers.
-- Use list comprehensions. 
-- Add comments and docstrings.
-- Use Type Annotations.
-- When printing lists, print each item in a new line.
-- Don't put import or from statements inside the code, only at the beginning of the script.
-- Prioritize short, readable code with minimal lines.
-- Avoid using try-except blocks unless absolutely necessary for flow.
-- When catching exceptions, keep the surface area small and log succinct, actionable messages. Don’t swallow errors that affect correctness.
-
-## Code Behavior
-- Reuse existing functions or classes when possible—don’t rewrite them unless the prompt says so.
-- Avoid redundency. 
-- Keep functions short and modular.
-- Do **NOT** implement tests.
-- Always encapsulate new functionality in methods.
-- Avoid unnecessary boilerplate, patterns, or abstractions—opt for fast, working code.
-
-## Tools and Libraries
-- ALWAYS update the `requirements.txt` and the `README.md` after each code edit.
-- Use standard libraries or popular ones (e.g., pandas, requests, langchain, openai).
-- Match library usage to the versions specified in .
-- For OpenAI SDK (openai>=1.30), use the modern client: from openai import OpenAI and client.chat.completions.create(...). Avoid legacy v0 API patterns.
-
-## Documentation Awareness
-- Always check the official documentation for the exact version of the library listed in `requirements.txt`.
-- Do not use features or syntax from newer versions.
-- Avoid generic usage patterns that may not apply to the specific version.
-- Always update the README.md if new features or significant changes are introduced.
-
-## Thoughtfulness Over Speed
 - Take your time to reason through the code before suggesting.
-- Quality, clarity, and correctness are more important than fast completions.
+- Prioritize quality, clarity, and correctness over speed.
 - Prefer complete and coherent code blocks over partial or rushed suggestions.
 
-## Additional Guidance
-- Secrets: never hardcode or echo secret keys; rely on config/.env and document required variables.
-- Diagnostics: when adding debug output, keep it optional, lightweight, and safe; prefer using the existing logger.
+## Documentation & Guidance
+- Always check the official documentation for the exact version of the library listed in `requirements.txt`.
+- Avoid using features or syntax from newer versions.
+- Update the README.md if new features or significant changes are introduced.
+- Never hardcode or echo secret keys; rely on `config/.env`.
+- When adding debug output, keep it optional, lightweight, and safe; prefer using the existing logger.
 - Proceed with deletes and renames as instructed, without confirmation.
-- Don't implement fall backs.
+- Do NOT implement fallbacks.
 
 ## Communication
-- Avoid repitition of instructions or disclaimers in the same response.
-- Be very concise and to the point.
+- Avoid repetition of instructions or disclaimers.
+- Be **very concise and to the point.**
 - Less verbose is better.
