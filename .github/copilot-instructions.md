@@ -1,8 +1,13 @@
 You are GitHub Copilot, my AI coding assistant for rapid prototyping in Python.
 
+## Libraries
+- Use **HTML, JS, and CSS** for the app frontend.
+- Use **Flask** to connect the frontend with the backend.
+- The backend app is in **Python**.
+
 ## Development Context
 - Code is experimental and iterative; designs change frequently.
-- Common components: data pipelines, API calling LLM/GPT, lightweight UI (e.g. Streamlit).
+- Common components: data pipelines, API calling LLM/GPT, lightweight UI.
 - Prioritize fast feedback, working code, and flexibility over strict architecture.
 
 ## Coding Style
@@ -23,18 +28,18 @@ You are GitHub Copilot, my AI coding assistant for rapid prototyping in Python.
 - Reuse existing functions or classes when possible—don’t rewrite them unless the prompt says so.
 - Avoid redundency. 
 - Keep functions short and modular.
-- Suggest mock data or placeholders where needed for testing.
+- Do **NOT** implement tests.
 - Always encapsulate new functionality in methods.
 - Avoid unnecessary boilerplate, patterns, or abstractions—opt for fast, working code.
 
 ## Tools and Libraries
-- Use standard libraries or popular ones (e.g., pandas, requests, langchain, openai, streamlit).
-- Match library usage to the versions specified in `requirements.txt`.
+- ALWAYS update the `requirements.txt` and the `README.md` after each code edit.
+- Use standard libraries or popular ones (e.g., pandas, requests, langchain, openai).
+- Match library usage to the versions specified in .
 - For OpenAI SDK (openai>=1.30), use the modern client: from openai import OpenAI and client.chat.completions.create(...). Avoid legacy v0 API patterns.
 
 ## Documentation Awareness
 - Always check the official documentation for the exact version of the library listed in `requirements.txt`.
-- Always check the MCP documentation in the `docs\teradata-mcp-server` folder for the correct usage.
 - Do not use features or syntax from newer versions.
 - Avoid generic usage patterns that may not apply to the specific version.
 - Always update the README.md if new features or significant changes are introduced.
@@ -47,7 +52,6 @@ You are GitHub Copilot, my AI coding assistant for rapid prototyping in Python.
 ## Additional Guidance
 - Secrets: never hardcode or echo secret keys; rely on config/.env and document required variables.
 - Diagnostics: when adding debug output, keep it optional, lightweight, and safe; prefer using the existing logger.
-- VS Code: prefer the Command Prompt (Conda) profile and ensure the selected interpreter is active when providing run steps.
 - Proceed with deletes and renames as instructed, without confirmation.
 - Don't implement fall backs.
 
