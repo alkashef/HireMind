@@ -123,6 +123,10 @@ This starts the web server on http://localhost:5000, where you can:
     Get translated SQL queries
     Execute queries and view results
 
+Additionally, the current UI includes:
+    Applicants tab: use "select CVs folder:" and the Browse button to choose a local folder; the list shows .pdf and .docx files in that folder.
+    Roles tab: placeholder for future functionality.
+
 ## Batch Mode
 
 python app.py --batch

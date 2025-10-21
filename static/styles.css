@@ -1,0 +1,18 @@
+body { font-family: Arial, sans-serif; margin: 24px; }
+.row { display: flex; gap: 8px; align-items: center; }
+.path-box { flex: 1; }
+label { display: block; margin-bottom: 6px; }
+.folder-label { font-weight: 400; color: #444; font-size: 12px; }
+input[readonly] { width: 100%; padding: 8px; }
+button { padding: 8px 12px; cursor: pointer; }
+.list { margin-top: 16px; border: 1px solid #ddd; border-radius: 6px; padding: 8px; max-height: 360px; overflow: auto; }
+.item { padding: 6px 4px; border-bottom: 1px solid #f1f1f1; font-size: 14px; }
+.item:last-child { border-bottom: none; }
+.muted { color: #666; }
+
+/* Tabs */
+.tabs { border-bottom: 1px solid #e5e5e5; display: flex; gap: 12px; margin-bottom: 16px; }
+.tab-btn { background: transparent; border: none; padding: 8px 12px; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 600; }
+.tab-btn.active { border-bottom-color: #0078d4; color: #0078d4; }
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }

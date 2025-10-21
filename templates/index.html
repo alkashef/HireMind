@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Folder Browser</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <div class="tabs" role="tablist" aria-label="Sections">
+      <button id="tabApplicants" class="tab-btn active" role="tab" aria-selected="true" aria-controls="paneApplicants">Applicants</button>
+      <button id="tabRoles" class="tab-btn" role="tab" aria-selected="false" aria-controls="paneRoles">Roles</button>
+    </div>
+
+    <div id="paneApplicants" class="tab-pane active" role="tabpanel" aria-labelledby="tabApplicants">
+      <label class="folder-label" for="folderPath">Select CVs Folder</label>
+      <div class="row">
+        <div class="path-box">
+          <input id="folderPath" type="text" readonly placeholder="No folder selected" />
+        </div>
+        <button id="browseBtn">Browse…</button>
+        <button id="refreshBtn" title="Refresh list">Refresh</button>
+      </div>
+      <div id="list" class="list"></div>
+    </div>
+
+    <div id="paneRoles" class="tab-pane" role="tabpanel" aria-labelledby="tabRoles">
+      <div class="muted">Roles tab (placeholder)</div>
+    </div>
+
+    <script>
+      async function fetchJSON(url) {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return await r.json();
+      }
+
+      function renderList(folder, files) {
+        const box = document.getElementById('list');
+        document.getElementById('folderPath').value = folder || '';
+        if (!folder) {
+          box.innerHTML = '<div class="muted">No folder selected.</div>';
+          return;
+        }
+        if (!files || files.length === 0) {
+          box.innerHTML = `<div class="muted">No .pdf or .docx files in: ${folder}</div>`;
+          return;
+        }
+        box.innerHTML = files.map(f => `<div class="item">${f}</div>`).join('');
+      }
+
+      async function loadDefault() {
+        try {
+          const d = await fetchJSON('/api/list-files');
+          renderList(d.folder, d.files);
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      document.getElementById('browseBtn').addEventListener('click', async () => {
+        try {
+          const d = await fetchJSON('/api/pick-folder');
+          renderList(d.folder, d.files);
+        } catch (e) {
+          console.error(e);
+        }
+      });
+
+      document.getElementById('refreshBtn').addEventListener('click', loadDefault);
+
+      loadDefault();
+
+      // Tabs logic
+      const tabApplicants = document.getElementById('tabApplicants');
+      const tabRoles = document.getElementById('tabRoles');
+      const paneApplicants = document.getElementById('paneApplicants');
+      const paneRoles = document.getElementById('paneRoles');
+
+      function activate(tab) {
+        const isApplicants = tab === 'applicants';
+        tabApplicants.classList.toggle('active', isApplicants);
+        tabRoles.classList.toggle('active', !isApplicants);
+        tabApplicants.setAttribute('aria-selected', String(isApplicants));
+        tabRoles.setAttribute('aria-selected', String(!isApplicants));
+        paneApplicants.classList.toggle('active', isApplicants);
+        paneRoles.classList.toggle('active', !isApplicants);
+      }
+
+      tabApplicants.addEventListener('click', () => activate('applicants'));
+      tabRoles.addEventListener('click', () => activate('roles'));
+    </script>
+  </body>
+  </html>
