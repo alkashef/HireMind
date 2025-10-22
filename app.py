@@ -137,13 +137,15 @@ def api_extract():
             import csv
             with csv_path.open("r", encoding="utf-8", newline="") as f:
                 reader = csv.DictReader(f)
-                rows = [
-                    {"filename": r.get("filename", ""), "timestamp": r.get("timestamp", ""), "id": r.get("id", "")}
-                    for r in reader
-                ]
+                rows = []
+                for r in reader:
+                    rid = r.get("id") or r.get("ID") or r.get("Id") or ""
+                    ts = r.get("timestamp") or r.get("Timestamp") or ""
+                    cv = r.get("cv") or r.get("CV") or r.get("filename") or ""
+                    rows.append({"id": rid, "timestamp": ts, "cv": cv})
             return jsonify({"rows": rows})
 
-        # Append rows
+    # Append rows (idempotent: one row per CV filename)
         payload = request.get_json(silent=True) or {}
         files = payload.get("files") or []
 
@@ -155,15 +157,67 @@ def api_extract():
         saved = 0
         stamp = datetime.now().isoformat()
 
-        with csv_path.open("a", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f)
-            if is_new:
-                writer.writerow(["filename", "timestamp", "id"])
-            for fp in files:
-                filename = str(Path(fp).name)
-                uid = str(uuid.uuid4())
-                writer.writerow([filename, stamp, uid])
-                saved += 1
+        # Migrate existing legacy CSV (filename,timestamp,id) to new order/header (ID,Timestamp,CV)
+        if not is_new:
+            try:
+                with csv_path.open("r", encoding="utf-8", newline="") as rf:
+                    reader = csv.DictReader(rf)
+                    legacy = reader.fieldnames and [h.lower() for h in reader.fieldnames] == ["filename","timestamp","id"]
+                    existing_rows = list(reader) if reader.fieldnames else []
+                if legacy:
+                    with csv_path.open("w", encoding="utf-8", newline="") as wf:
+                        writer_mig = csv.writer(wf)
+                        writer_mig.writerow(["ID","Timestamp","CV"])
+                        for r in existing_rows:
+                            writer_mig.writerow([r.get("id",""), r.get("timestamp",""), r.get("filename","")])
+                    is_new = False
+            except Exception as _:
+                pass
+
+        # Load existing rows and build an index by CV for idempotency
+        existing: list[dict] = []
+        index_by_cv: dict[str, dict] = {}
+        header = ["ID", "Timestamp", "CV"]
+        if csv_path.exists():
+            try:
+                with csv_path.open("r", encoding="utf-8", newline="") as rf:
+                    reader = csv.DictReader(rf)
+                    if reader.fieldnames:
+                        for r in reader:
+                            rid = r.get("ID") or r.get("id") or r.get("Id") or ""
+                            ts = r.get("Timestamp") or r.get("timestamp") or ""
+                            cv = r.get("CV") or r.get("cv") or r.get("filename") or ""
+                            row = {"ID": rid, "Timestamp": ts, "CV": cv}
+                            existing.append(row)
+            except Exception as e:
+                log(f"Extract read existing error (continuing): {e}")
+
+        # Deduplicate existing on CV (keep first occurrence)
+        deduped: list[dict] = []
+        for row in existing:
+            cv = row["CV"]
+            if cv not in index_by_cv:
+                index_by_cv[cv] = row
+                deduped.append(row)
+
+        # Add new rows only for CVs not present
+        for fp in files:
+            cv_name = str(Path(fp).name)
+            if cv_name in index_by_cv:
+                continue  # already present -> do not create a new ID
+            uid = str(uuid.uuid4())
+            new_row = {"ID": uid, "Timestamp": stamp, "CV": cv_name}
+            index_by_cv[cv_name] = new_row
+            deduped.append(new_row)
+            saved += 1
+
+        # Write back file (header + deduped rows)
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        with csv_path.open("w", encoding="utf-8", newline="") as wf:
+            writer = csv.writer(wf)
+            writer.writerow(header)
+            for r in deduped:
+                writer.writerow([r["ID"], r["Timestamp"], r["CV"]])
 
         log(f"Extract saved {saved} rows -> {csv_path}")
         return jsonify({"saved": saved, "csv": str(csv_path)})

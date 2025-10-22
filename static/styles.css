@@ -21,9 +21,13 @@ button { padding: 8px 12px; cursor: pointer; }
 .data-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; }
 .data-table th, .data-table td { border: 1px solid #eee; padding: 6px 8px; text-align: left; }
 .data-table thead th { background: #f7f7f7; font-weight: 600; }
+.data-table td:first-child { background: #f7f7f7; font-weight: 600; }
 .data-table thead .filter-row th { background: #fff; }
 .data-table thead .filter-row input { width: 100%; padding: 4px 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; box-sizing: border-box; }
 .data-table tbody tr:nth-child(even) { background: #fafafa; }
+
+/* Constrain table height to half-size and allow scrolling */
+.table-wrap { max-height: 180px; overflow: auto; margin-top: 8px; }
 .file-count { color: #999; font-size: 12px; }
 
 /* Tabs */
@@ -32,3 +36,8 @@ button { padding: 8px 12px; cursor: pointer; }
 .tab-btn.active { border-bottom-color: #0078d4; color: #0078d4; }
 .tab-pane { display: none; }
 .tab-pane.active { display: block; }
+
+/* Two-pane layout: left list (50%) and right details (50%) */
+.content-row { display: flex; gap: 16px; align-items: flex-start; margin-top: 8px; }
+.left-pane { flex: 0 0 50%; max-width: 50%; }
+.right-pane { flex: 1 1 0; min-width: 0; }

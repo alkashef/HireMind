@@ -21,24 +21,25 @@
         <button id="browseBtn">Browse…</button>
         <button id="refreshBtn" title="Refresh list">Refresh</button>
       </div>
-      <div id="list" class="list"></div>
-      <div class="list-footer">
-        <span id="fileCount" class="file-count"></span>
-        <div class="actions">
-          <button id="extractBtn">Extract</button>
+      <div class="content-row">
+        <div class="left-pane">
+          <div id="list" class="list"></div>
+          <div class="list-footer">
+            <span id="fileCount" class="file-count"></span>
+            <div class="actions">
+              <button id="selectAllBtn" title="Select all files">Select All</button>
+              <button id="extractBtn">Extract</button>
+            </div>
+          </div>
+        </div>
+        <div class="right-pane">
+          <div class="table-wrap">
+            <table id="extractTable" class="data-table" aria-label="Selected record details">
+              <tbody></tbody>
+            </table>
+          </div>
         </div>
       </div>
-      <table id="extractTable" class="data-table" aria-label="Extracted info">
-        <thead>
-          <tr><th>filename</th><th>timestamp</th><th>id</th></tr>
-          <tr class="filter-row">
-            <th><input id="filter-filename" type="text" placeholder="Filter filename" /></th>
-            <th><input id="filter-timestamp" type="text" placeholder="Filter timestamp" /></th>
-            <th><input id="filter-id" type="text" placeholder="Filter id" /></th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
     </div>
 
     <div id="paneRoles" class="tab-pane" role="tabpanel" aria-labelledby="tabRoles">
@@ -53,6 +54,7 @@
       }
 
       const selected = new Set();
+      let lastSelectedIndex = null; // track last clicked index for shift-range
 
       function updateFooter(total) {
         const countEl = document.getElementById('fileCount');
@@ -63,29 +65,24 @@
 
       let tableRows = [];
 
-      function getHeaderFilters() {
-        return {
-          filename: (document.getElementById('filter-filename')?.value || '').toLowerCase(),
-          timestamp: (document.getElementById('filter-timestamp')?.value || '').toLowerCase(),
-          id: (document.getElementById('filter-id')?.value || '').toLowerCase(),
-        };
+      function getSingleSelectedBasename() {
+        if (selected.size !== 1) return null;
+        const onlyPath = Array.from(selected)[0] || '';
+        return onlyPath.toString().split(/[\\\\/]/).pop();
       }
 
-      function renderTable() {
-        const { filename: ff, timestamp: ft, id: fid } = getHeaderFilters();
+      function renderDetailForSelection() {
         const tbody = document.querySelector('#extractTable tbody');
-        const rows = tableRows.filter(r => {
-          const rf = (r.filename || '').toLowerCase();
-          const rt = (r.timestamp || '').toLowerCase();
-          const rid = (r.id || '').toLowerCase();
-          const okF = ff ? rf.includes(ff) : true;
-          const okT = ft ? rt.includes(ft) : true;
-          const okI = fid ? rid.includes(fid) : true;
-          return okF && okT && okI;
-        });
-        tbody.innerHTML = rows.map(r => (
-          `<tr><td>${r.filename || ''}</td><td>${r.timestamp || ''}</td><td>${r.id || ''}</td></tr>`
-        )).join('');
+        const cvName = getSingleSelectedBasename();
+        if (!cvName) { tbody.innerHTML = ''; return; }
+        const rec = tableRows.find(r => (r.cv || '') === cvName);
+        if (!rec) { tbody.innerHTML = ''; return; }
+        const pairs = [
+          ['ID', rec.id || ''],
+          ['Timestamp', rec.timestamp || ''],
+          ['CV', rec.cv || ''],
+        ];
+        tbody.innerHTML = pairs.map(([h, v]) => `<tr><td>${h}</td><td>${v}</td></tr>`).join('');
       }
 
       async function refreshTable() {
@@ -93,7 +90,7 @@
           const r = await fetch('/api/extract');
           const j = await r.json();
           tableRows = Array.isArray(j.rows) ? j.rows : [];
-          renderTable();
+          renderDetailForSelection();
         } catch (e) {
           console.error('Failed to load table rows', e);
         }
@@ -114,21 +111,60 @@
           updateFooter(0);
           return;
         }
-        box.innerHTML = files.map(f => `<div class="item" data-path="${encodeURIComponent(f)}">${f}</div>`).join('');
+          box.innerHTML = files.map((f, i) => {
+            const name = (f || '').toString().split(/[\\\\/]/).pop();
+            return `<div class="item" data-index="${i}" data-path="${encodeURIComponent(f)}">${name}</div>`;
+          }).join('');
         updateFooter(files.length);
 
         // Attach click handlers for selection toggle (multi-select)
-        box.querySelectorAll('.item').forEach(el => {
-          el.addEventListener('click', () => {
-            const p = decodeURIComponent(el.getAttribute('data-path'));
-            if (el.classList.contains('selected')) {
-              el.classList.remove('selected');
-              selected.delete(p);
+        const items = Array.from(box.querySelectorAll('.item'));
+        const clearAll = () => {
+          items.forEach(node => node.classList.remove('selected'));
+          selected.clear();
+        };
+        const toggleOne = (node) => {
+          const p = decodeURIComponent(node.getAttribute('data-path'));
+          if (node.classList.contains('selected')) {
+            node.classList.remove('selected');
+            selected.delete(p);
+          } else {
+            node.classList.add('selected');
+            selected.add(p);
+          }
+        };
+        const selectOne = (node) => {
+          clearAll();
+          const p = decodeURIComponent(node.getAttribute('data-path'));
+          node.classList.add('selected');
+          selected.add(p);
+        };
+        const selectRange = (startIdx, endIdx) => {
+          clearAll();
+          const [a, b] = startIdx <= endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
+          for (let i = a; i <= b; i++) {
+            const node = items[i];
+            const p = decodeURIComponent(node.getAttribute('data-path'));
+            node.classList.add('selected');
+            selected.add(p);
+          }
+        };
+
+        items.forEach(el => {
+          el.addEventListener('click', (ev) => {
+            const idx = Number(el.getAttribute('data-index'));
+            if (ev.shiftKey && lastSelectedIndex !== null && !Number.isNaN(idx)) {
+              selectRange(lastSelectedIndex, idx);
+            } else if (ev.ctrlKey || ev.metaKey) {
+              // toggle without clearing
+              toggleOne(el);
             } else {
-              el.classList.add('selected');
-              selected.add(p);
+              // plain click -> single selection only
+              selectOne(el);
             }
+            lastSelectedIndex = idx;
             updateFooter(files.length);
+            renderDetailForSelection();
           });
         });
       }
@@ -153,6 +189,18 @@
 
       document.getElementById('refreshBtn').addEventListener('click', loadDefault);
 
+      // Select All button -> select all items in the list
+      document.getElementById('selectAllBtn').addEventListener('click', () => {
+        const items = Array.from(document.querySelectorAll('#list .item'));
+        items.forEach(el => {
+          const p = decodeURIComponent(el.getAttribute('data-path'));
+          el.classList.add('selected');
+          selected.add(p);
+        });
+        updateFooter(items.length);
+        renderDetailForSelection();
+      });
+
       // Extract button handler -> call backend API (no alerts on success)
       document.getElementById('extractBtn').addEventListener('click', async () => {
         const picked = Array.from(selected);
@@ -171,6 +219,12 @@
           if (!r.ok) throw new Error(j.error || 'Extraction failed');
           // silently refresh table; no message shown
           await refreshTable();
+          // Unselect all items and update footer
+          const items = Array.from(document.querySelectorAll('#list .item'));
+          items.forEach(el => el.classList.remove('selected'));
+          selected.clear();
+          updateFooter(items.length);
+          renderDetailForSelection();
         } catch (e) {
           console.error(e);
           // no user alert on error per requirement
@@ -179,10 +233,6 @@
 
       loadDefault();
       refreshTable();
-      ['filter-filename','filter-timestamp','filter-id'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.addEventListener('input', () => renderTable());
-      });
 
       // Tabs logic
       const tabApplicants = document.getElementById('tabApplicants');
