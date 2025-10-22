@@ -141,7 +141,7 @@ This starts the web server on http://localhost:5000, where you can:
     Execute queries and view results
 
 Additionally, the current UI includes:
-    Applicants tab: use "CVs Repository:" and the Browse button to choose a local folder; the list shows .pdf and .docx files, supports multi-select, shows `N files | M selected` beneath the list, provides an "Extract" button that saves file metadata to `data/data_applicants.csv`, and renders a read-only, filterable table of the extracted rows below.
+    Applicants tab: use "CVs Repository:" and the Browse button to choose a local folder; the list shows .pdf and .docx files, supports multi-select, shows `N files | M selected` beneath the list, provides an "Extract" button that saves file metadata to `data/data_applicants.csv`, and renders a read-only table with per-column header filters (Excel-style) of the extracted rows below.
     Roles tab: placeholder for future functionality.
 
 ## Batch Mode

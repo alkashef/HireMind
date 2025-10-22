@@ -15,8 +15,17 @@ from services.cv_processor import CVProcessor
 # Load environment variables
 load_dotenv('config/.env')
 
-# Configure logger
-logger.add("logs/hiremind_{time}.log", rotation="1 day", retention="7 days")
+# Configure logger -> single file from .env (LOG_FILE_PATH)
+log_path = os.getenv('LOG_FILE_PATH', 'logs/app.log')
+Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+# Avoid multiple handlers on Streamlit reruns
+logger.remove()
+logger.add(
+    log_path,
+    format="[{time:YYYY-MM-DD HH:mm:ss}] {message}",
+    level="INFO",
+    enqueue=True
+)
 
 
 def initialize_session_state():

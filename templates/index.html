@@ -28,13 +28,14 @@
           <button id="extractBtn">Extract</button>
         </div>
       </div>
-      <div class="table-toolbar">
-        <label for="tableFilter" class="folder-label" style="margin-top:6px;">Filter:</label>
-        <input id="tableFilter" type="text" placeholder="Type to filter rows..." />
-      </div>
       <table id="extractTable" class="data-table" aria-label="Extracted info">
         <thead>
           <tr><th>filename</th><th>timestamp</th><th>id</th></tr>
+          <tr class="filter-row">
+            <th><input id="filter-filename" type="text" placeholder="Filter filename" /></th>
+            <th><input id="filter-timestamp" type="text" placeholder="Filter timestamp" /></th>
+            <th><input id="filter-id" type="text" placeholder="Filter id" /></th>
+          </tr>
         </thead>
         <tbody></tbody>
       </table>
@@ -62,16 +63,25 @@
 
       let tableRows = [];
 
-      function renderTable(filterText = '') {
+      function getHeaderFilters() {
+        return {
+          filename: (document.getElementById('filter-filename')?.value || '').toLowerCase(),
+          timestamp: (document.getElementById('filter-timestamp')?.value || '').toLowerCase(),
+          id: (document.getElementById('filter-id')?.value || '').toLowerCase(),
+        };
+      }
+
+      function renderTable() {
+        const { filename: ff, timestamp: ft, id: fid } = getHeaderFilters();
         const tbody = document.querySelector('#extractTable tbody');
-        const ft = (filterText || '').toLowerCase();
         const rows = tableRows.filter(r => {
-          if (!ft) return true;
-          return (
-            (r.filename || '').toLowerCase().includes(ft) ||
-            (r.timestamp || '').toLowerCase().includes(ft) ||
-            (r.id || '').toLowerCase().includes(ft)
-          );
+          const rf = (r.filename || '').toLowerCase();
+          const rt = (r.timestamp || '').toLowerCase();
+          const rid = (r.id || '').toLowerCase();
+          const okF = ff ? rf.includes(ff) : true;
+          const okT = ft ? rt.includes(ft) : true;
+          const okI = fid ? rid.includes(fid) : true;
+          return okF && okT && okI;
         });
         tbody.innerHTML = rows.map(r => (
           `<tr><td>${r.filename || ''}</td><td>${r.timestamp || ''}</td><td>${r.id || ''}</td></tr>`
@@ -83,8 +93,7 @@
           const r = await fetch('/api/extract');
           const j = await r.json();
           tableRows = Array.isArray(j.rows) ? j.rows : [];
-          const tf = document.getElementById('tableFilter');
-          renderTable(tf.value);
+          renderTable();
         } catch (e) {
           console.error('Failed to load table rows', e);
         }
@@ -170,9 +179,9 @@
 
       loadDefault();
       refreshTable();
-
-      document.getElementById('tableFilter').addEventListener('input', (e) => {
-        renderTable(e.target.value);
+      ['filter-filename','filter-timestamp','filter-id'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('input', () => renderTable());
       });
 
       // Tabs logic

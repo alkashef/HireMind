@@ -18,11 +18,11 @@ button { padding: 8px 12px; cursor: pointer; }
 /* Footer under list */
 .list-footer { display: flex; justify-content: flex-start; align-items: flex-start; gap: 8px; margin-top: 6px; }
 .list-footer .actions { margin-left: auto; }
-.table-toolbar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
-.table-toolbar input { padding: 6px 8px; flex: 1; border: 1px solid #ddd; border-radius: 6px; }
 .data-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; }
 .data-table th, .data-table td { border: 1px solid #eee; padding: 6px 8px; text-align: left; }
 .data-table thead th { background: #f7f7f7; font-weight: 600; }
+.data-table thead .filter-row th { background: #fff; }
+.data-table thead .filter-row input { width: 100%; padding: 4px 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; box-sizing: border-box; }
 .data-table tbody tr:nth-child(even) { background: #fafafa; }
 .file-count { color: #999; font-size: 12px; }
 
