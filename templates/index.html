@@ -46,7 +46,31 @@
       <div class="muted">Roles tab (placeholder)</div>
     </div>
 
-    <script>
+  <script src="{{ url_for('static', filename='status.js') }}"></script>
+  <script>
+      // Verbose status + progress helpers
+      let statusTimer = null;
+      let statusStartTs = null;
+      function setStatus(msg) { const sb = document.getElementById('statusBar'); if (sb) sb.value = msg || ''; }
+      function startStatusProgress(prefix) {
+        stopStatusProgress();
+        statusStartTs = Date.now();
+        setStatus(`${prefix} (0.0s)...`);
+        statusTimer = setInterval(() => {
+          const s = ((Date.now() - statusStartTs) / 1000).toFixed(1);
+          setStatus(`${prefix} (${s}s)...`);
+        }, 200);
+      }
+      function stopStatusProgress(finalMsg) {
+        if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
+        if (typeof finalMsg === 'string') setStatus(finalMsg);
+      }
+      function setUIBusy(busy) {
+        ['browseBtn','refreshBtn','selectAllBtn','extractBtn'].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.disabled = !!busy;
+        });
+      }
       async function fetchJSON(url) {
         const r = await fetch(url);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -63,6 +87,7 @@
         const selNum = selected.size || 0;
         const dupText = duplicateCount > 0 ? ` | ${duplicateCount} duplicates found` : '';
         countEl.textContent = `${totalNum} file${totalNum === 1 ? '' : 's'} | ${selNum} selected${dupText}`;
+        if (selNum > 0) setStatus(`Selected ${selNum} file${selNum === 1 ? '' : 's'}.`);
       }
 
       let tableRows = [];
@@ -76,31 +101,37 @@
       function renderDetailForSelection() {
         const tbody = document.querySelector('#extractTable tbody');
         const cvName = getSingleSelectedBasename();
-        if (!cvName) { tbody.innerHTML = ''; return; }
-        const rec = tableRows.find(r => (r.cv || '') === cvName);
-        if (!rec) { tbody.innerHTML = ''; const sb=document.getElementById('statusBar'); if (sb) sb.value = 'Not extracted yet'; return; }
+        // Always render the table structure; populate values if available
+        const rec = cvName ? tableRows.find(r => (r.cv || '') === cvName) : null;
+        if (!rec && cvName) {
+          if (window.setStatus) window.setStatus('Not extracted yet');
+        }
         const pairs = [
-          ['ID', rec.id || ''],
-          ['Timestamp', rec.timestamp || ''],
-          ['CV', rec.cv || ''],
-          ['Full Name', rec.full_name || ''],
+          ['ID', (rec && rec.id) || ''],
+          ['Timestamp', (rec && rec.timestamp) || ''],
+          ['CV', (rec && rec.cv) || (cvName || '')],
+          ['Full Name', (rec && rec.full_name) || ''],
         ];
         tbody.innerHTML = pairs.map(([h, v]) => `<tr><td>${h}</td><td>${v}</td></tr>`).join('');
       }
 
       async function refreshTable() {
         try {
+          if (window.setStatus) window.setStatus('Loading extracted results...');
           const r = await fetch('/api/extract');
           const j = await r.json();
           tableRows = Array.isArray(j.rows) ? j.rows : [];
           renderDetailForSelection();
+          if (window.setStatus) window.setStatus('Ready');
         } catch (e) {
           console.error('Failed to load table rows', e);
+          if (window.setStatus) window.setStatus(`Error loading results: ${e.message || e}`);
         }
       }
 
       async function highlightDuplicates(files) {
         try {
+          if (window.setStatus) window.setStatus('Computing duplicates...');
           const r = await fetch('/api/hashes', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -119,6 +150,7 @@
         } finally {
           const items = Array.from(document.querySelectorAll('#list .item'));
           updateFooter(items.length);
+          if (window.setStatus) window.setStatus('Ready');
         }
       }
 
@@ -199,23 +231,29 @@
 
       async function loadDefault() {
         try {
+          if (window.setStatus) window.setStatus('Loading folder...');
           const d = await fetchJSON('/api/list-files');
           renderList(d.folder, d.files);
+          if (window.setStatus) window.setStatus('Ready');
         } catch (e) {
           console.error(e);
+          if (window.setStatus) window.setStatus(`Error loading folder: ${e.message || e}`);
         }
       }
 
       document.getElementById('browseBtn').addEventListener('click', async () => {
         try {
+          if (window.setStatus) window.setStatus('Opening folder picker...');
           const d = await fetchJSON('/api/pick-folder');
           renderList(d.folder, d.files);
+          if (window.setStatus) window.setStatus('Ready');
         } catch (e) {
           console.error(e);
+          if (window.setStatus) window.setStatus(`Error picking folder: ${e.message || e}`);
         }
       });
 
-      document.getElementById('refreshBtn').addEventListener('click', loadDefault);
+  document.getElementById('refreshBtn').addEventListener('click', () => { if (window.setStatus) window.setStatus('Refreshing...'); loadDefault(); });
 
       // Select All button -> select all items in the list
       document.getElementById('selectAllBtn').addEventListener('click', () => {
@@ -238,6 +276,8 @@
           return;
         }
         try {
+          if (window.setUIBusy) window.setUIBusy(true);
+          if (window.startStatusProgress) window.startStatusProgress(`Extracting ${picked.length} file${picked.length === 1 ? '' : 's'}`);
           const r = await fetch('/api/extract', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -254,19 +294,25 @@
           updateFooter(items.length);
           renderDetailForSelection();
           // Update status bar with any errors summary
-          const status = document.getElementById('statusBar');
           const errs = Array.isArray(j.errors) ? j.errors : [];
-          status.value = errs.length ? `Errors: ${errs.join(' | ')}` : `Saved: ${j.saved}`;
+          if (errs.length) {
+            if (window.stopStatusProgress) window.stopStatusProgress(`Extraction completed with ${errs.length} error${errs.length === 1 ? '' : 's'}; saved ${j.saved}.`);
+          } else {
+            if (window.stopStatusProgress) window.stopStatusProgress(`Extraction completed successfully; saved ${j.saved}.`);
+          }
         } catch (e) {
           console.error(e);
           // no user alert on error per requirement
-          const status = document.getElementById('statusBar');
-          status.value = `Error: ${e.message || e}`;
+          if (window.stopStatusProgress) window.stopStatusProgress(`Error: ${e.message || e}`);
+        } finally {
+          if (window.setUIBusy) window.setUIBusy(false);
         }
       });
 
+  if (window.setStatus) window.setStatus('Initializing...');
   loadDefault();
   refreshTable();
+  if (window.setStatus) window.setStatus('Ready');
 
       // Tabs logic
       const tabApplicants = document.getElementById('tabApplicants');

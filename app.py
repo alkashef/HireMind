@@ -6,37 +6,27 @@ from datetime import datetime
 import hashlib
 from pathlib import Path
 from typing import List
+import json
 
 from flask import Flask, jsonify, render_template, request
-from dotenv import load_dotenv
+
+from config.settings import AppConfig
+from utils.logger import AppLogger
 
 
 app = Flask(__name__)
 
-
-# --- Env & Logger -----------------------------------------------------------
-
-def _load_env() -> None:
-    env_path = Path(__file__).resolve().parent / "config" / ".env"
-    if env_path.exists():
-        load_dotenv(dotenv_path=env_path)
+# Centralized config and logger
+config = AppConfig()
+logger = AppLogger(config.log_file_path)
 
 
 def log(message: str) -> None:
-    """Append a log line to LOG_FILE_PATH with [TIMESTAMP] prefix."""
-    _load_env()
-    log_path = os.getenv("LOG_FILE_PATH", "logs/app.log")
-    Path(log_path).parent.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(log_path, "a", encoding="utf-8") as f:
-        f.write(f"[{stamp}] {message}\n")
+    logger.log(message)
 
 
 def log_kv(event: str, **fields: object) -> None:
-    """Structured logging helper: EVENT | k=v ..."""
-    parts = [f"{k}={v}" for k, v in fields.items()]
-    msg = f"{event} | " + " ".join(parts) if parts else event
-    log(msg)
+    logger.log_kv(event, **fields)
 
 
 # Log once when the app handles the first request (Flask 3.x safe)
@@ -48,16 +38,11 @@ def _app_ready() -> None:
 
 
 def get_default_folder() -> str:
-    _load_env()
-    return os.getenv("DEFAULT_FOLDER", str(Path.home()))
+    return config.default_folder
 
 
 def get_data_path() -> Path:
-    """Return base data folder from env (DATA_PATH) or default 'data'."""
-    _load_env()
-    base = Path(os.getenv("DATA_PATH", "data"))
-    base.mkdir(parents=True, exist_ok=True)
-    return base
+    return config.data_path
 
 
 def list_docs(folder: str) -> List[str]:
@@ -79,21 +64,15 @@ def sha256_file(path: Path) -> str:
 
 
 def get_max_file_mb() -> int:
-    _load_env()
-    try:
-        return int(os.getenv("MAX_FILE_MB", "10"))
-    except Exception:
-        return 10
+    return config.max_file_mb
 
 
 def get_openai_model() -> str:
-    _load_env()
-    return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    return config.openai_model
 
 
 def get_openai_api_key() -> str | None:
-    _load_env()
-    return os.getenv("OPENAI_API_KEY")
+    return config.openai_api_key
 
 
 def extract_full_name_with_openai(file_path: Path) -> tuple[str | None, str | None]:
@@ -109,11 +88,6 @@ def extract_full_name_with_openai(file_path: Path) -> tuple[str | None, str | No
         import openai as openai_pkg  # for version reporting
         client = OpenAI()
 
-        # Ensure Responses API is available in the installed SDK
-        if not hasattr(client, "responses"):
-            ver = getattr(openai_pkg, "__version__", "unknown")
-            return None, f"OpenAI SDK {ver} does not support Responses API. Please install pinned version from requirements.txt."
-
         # Load prompts from files
         def _load_prompt(name: str) -> str:
             p = Path(__file__).resolve().parent / "prompts" / name
@@ -126,58 +100,135 @@ def extract_full_name_with_openai(file_path: Path) -> tuple[str | None, str | No
         system_text = _load_prompt("cv_full_name_system.md")
         user_text = _load_prompt("cv_full_name_user.md")
 
-        # Upload the file and force JSON extraction
+        # Upload the file once; used by both SDK and HTTP fallback
         up = client.files.create(file=file_path.open("rb"), purpose="assistants")
-        # Attempt with JSON response formatting; if SDK doesn't support response_format, retry without it
-        try:
-            response = client.responses.create(
-                model=get_openai_model(),
-                input=[
-                    {"role": "system", "content": [{"type": "text", "text": system_text}]},
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "input_text", "text": user_text}
-                        ],
-                        "attachments": [
-                            {"file_id": up.id, "tools": [{"type": "file_search"}]}
-                        ],
-                    },
-                ],
-                tools=[{"type": "file_search"}],
-                response_format={"type": "json_object"},
-            )
-        except TypeError:
-            # Fallback for older SDKs lacking response_format
-            response = client.responses.create(
-                model=get_openai_model(),
-                input=[
-                    {"role": "system", "content": [{"type": "text", "text": system_text}]},
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "input_text", "text": user_text}
-                        ],
-                        "attachments": [
-                            {"file_id": up.id, "tools": [{"type": "file_search"}]}
-                        ],
-                    },
-                ],
-                tools=[{"type": "file_search"}],
-            )
 
-        # Extract JSON content
-        # Prefer output_text when available, else attempt to access structured output
-        content = getattr(response, "output_text", None)
-        if not content:
+        # If SDK has Responses, use it; otherwise, fall back to raw HTTP
+        if hasattr(client, "responses"):
+            # Create a temporary vector store and attach the file for file_search
+            vs = client.vector_stores.create(name="hiremind_temp_vs")
             try:
-                content = response.output[0].content[0].text
+                client.vector_stores.files.create(vector_store_id=vs.id, file_id=up.id)
+                log_kv("OPENAI_VECTOR_STORE", id=vs.id)
+                # Latest SDK: use text.format (prefer json_schema for strictness)
+                response = client.responses.create(
+                    model=get_openai_model(),
+                    input=[
+                        {"role": "system", "content": [{"type": "input_text", "text": system_text}]},
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "input_text", "text": user_text},
+                                {"type": "input_file", "file_id": up.id}
+                            ],
+                        },
+                    ],
+                    tools=[{"type": "file_search", "vector_store_ids": [vs.id]}],
+                    text={"format": {"type": "json_object"}},
+                )
+            finally:
+                try:
+                    client.vector_stores.delete(vector_store_id=vs.id)
+                except Exception:
+                    pass
+
+            # Extract JSON content
+            content = getattr(response, "output_text", None)
+            if not content:
+                try:
+                    content = response.output[0].content[0].text
+                except Exception:
+                    content = ""
+            data = json.loads(content) if content else {}
+            full_name = data.get("full_name") or ""
+            return full_name, None
+        else:
+            # Raw HTTP fallback to Responses API
+            try:
+                import requests
             except Exception:
-                content = ""
-        import json
-        data = json.loads(content) if content else {}
-        full_name = data.get("full_name") or ""
-        return full_name, None
+                ver = getattr(openai_pkg, "__version__", "unknown")
+                return None, (
+                    f"OpenAI SDK {ver} lacks Responses API and 'requests' is unavailable for HTTP fallback. "
+                    "Add 'requests' to requirements.txt and reinstall."
+                )
+
+            base_url = config.openai_base_url
+            # Create vector store and attach file via HTTP
+            vs_url = f"{base_url.rstrip('/')}/vector_stores"
+            headers_json = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+            try:
+                vs_resp = requests.post(vs_url, headers=headers_json, data=json.dumps({"name": "hiremind_temp_vs"}), timeout=float(os.getenv("REQUEST_TIMEOUT_SECONDS", "60")))
+                if vs_resp.status_code >= 400:
+                    return None, f"HTTP fallback error (vector_store create): {vs_resp.status_code} {vs_resp.text}"
+                vs_id = vs_resp.json().get("id")
+                if not vs_id:
+                    return None, "HTTP fallback error: vector_store id missing"
+                log_kv("OPENAI_VECTOR_STORE", id=vs_id)
+                # Attach file
+                attach_url = f"{base_url.rstrip('/')}/vector_stores/{vs_id}/files"
+                att_resp = requests.post(attach_url, headers=headers_json, data=json.dumps({"file_id": up.id}), timeout=float(os.getenv("REQUEST_TIMEOUT_SECONDS", "60")))
+                if att_resp.status_code >= 400:
+                    return None, f"HTTP fallback error (vector_store attach): {att_resp.status_code} {att_resp.text}"
+            except Exception as e:
+                return None, f"HTTP fallback error (vector_store): {e}"
+
+            url = f"{base_url.rstrip('/')}/responses"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+            body = {
+                "model": get_openai_model(),
+                "input": [
+                    {"role": "system", "content": [{"type": "input_text", "text": system_text}]},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": user_text},
+                            {"type": "input_file", "file_id": up.id}
+                        ],
+                    },
+                ],
+                "tools": [{"type": "file_search", "vector_store_ids": [vs_id]}],
+                "text": {"format": {"type": "json_object"}},
+            }
+            # Log fallback usage
+            try:
+                log_kv("OPENAI_FALLBACK_HTTP", url=url, model=body.get("model"))
+            except Exception:
+                pass
+            try:
+                resp = requests.post(url, headers=headers, data=json.dumps(body), timeout=config.request_timeout_seconds)
+            except Exception as e:
+                return None, f"HTTP fallback error: {e}"
+            if resp.status_code >= 400:
+                return None, f"HTTP fallback error: {resp.status_code} {resp.text}"
+            try:
+                payload = resp.json()
+            except Exception:
+                payload = {}
+
+            # Try to align with SDK's output_text when present
+            content = payload.get("output_text")
+            if not content:
+                # Try traversing 'output' -> list -> content -> text
+                try:
+                    content = payload["output"][0]["content"][0]["text"]
+                except Exception:
+                    content = ""
+            data = json.loads(content) if content else {}
+            full_name = data.get("full_name") or ""
+            # Cleanup vector store
+            try:
+                del_resp = requests.delete(f"{base_url.rstrip('/')}/vector_stores/{vs_id}", headers={"Authorization": f"Bearer {api_key}"}, timeout=config.request_timeout_seconds)
+                # ignore status
+            except Exception:
+                pass
+            return full_name, None
     except Exception as e:
         return None, str(e)
 

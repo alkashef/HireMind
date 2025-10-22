@@ -21,6 +21,9 @@ HireMind orchestrates a CV extraction workflow that feeds candidate documents th
 - `services/cv_processor.py` – batch processor that writes CSV output to `data/`
 - `prompts/` – prompt templates used by the OpenAI extraction flow (e.g., `cv_full_name_system.md`, `cv_full_name_user.md`)
 - `config/.env` – runtime configuration (mirrored by `config/.env-example`)
+- `config/settings.py` – central AppConfig loader for environment and paths
+- `utils/logger.py` – AppLogger writing to `LOG_FILE_PATH` with [TIMESTAMP] and kv helper
+- `static/status.js` – shared in-app status and progress helpers used by the UI
 
 ## Setup for Development
 
@@ -44,6 +47,8 @@ Verify the OpenAI SDK and Responses API support using the same interpreter:
 python -c "import openai; print('openai', openai.__version__); from openai import OpenAI; print('has_responses', hasattr(OpenAI(), 'responses'))"
 ```
 Expected: `has_responses True`. If it's False, ensure you're installing with the same Python: `python -m pip install -r requirements.txt`.
+
+If the SDK still reports `has_responses False`, the app will automatically fall back to calling the Responses REST API directly (requires `requests`, included in `requirements.txt`). No UI changes are needed. The app uses `text.format: json_object` for `full_name` extraction.
 
 ### GPU Configuration
 
@@ -111,9 +116,9 @@ DATA_PATH=data
 The Extract action writes rows to `DATA_PATH/data_applicants.csv` with columns: `ID,Timestamp,CV,FullName`.
 IDs are SHA-256 content hashes of files; identical-content files share the same ID (last write wins for CV name).
 
-Pinned SDK version
+OpenAI SDK version
 
-- This project pins the OpenAI Python SDK (see requirements.txt) to ensure the Responses API supports `response_format=json_object` for strict JSON output. If you previously installed a different version globally, reinstall with `pip install -r requirements.txt` to avoid runtime errors like `Responses.create() got an unexpected keyword argument 'response_format'`.
+- This project now targets the latest OpenAI Python SDK (see requirements.txt). The Responses API uses `text.format`; we set `text.format` to `json_object` to return structured JSON. If you previously installed a different version globally, reinstall with `python -m pip install -r requirements.txt`.
 
 ### How to Test
 
@@ -154,7 +159,7 @@ This starts the web server on http://localhost:5000. On launch, the log will inc
     Execute queries and view results
 
 Additionally, the current UI includes:
-    Applicants tab: use "CVs Repository:" and the Browse button to choose a local folder. The top bar includes a Refresh button to reload the list. The UI is split: left pane (50% width) shows the file list with filenames only (no full paths) and a footer with Select All and Extract buttons; single-click selects one file, while Ctrl/⌘-click toggles multiple and Shift-click selects a range. The list shows `N files | M selected | X duplicates found` and highlights duplicates (by content hash) in pink. The right pane renders a read-only, transposed two-column detail table (Header | Value) for the single selected record (scrollable, constrained height). If the selected file hasn't been extracted yet, the detail shows `Status | Not extracted yet`. After extraction, the selection is cleared. A status bar at the bottom shows success/errors.
+    Applicants tab: use "CVs Repository:" and the Browse button to choose a local folder. The top bar includes a Refresh button to reload the list. The UI is split: left pane (50% width) shows the file list with filenames only (no full paths) and a footer with Select All and Extract buttons; single-click selects one file, while Ctrl/⌘-click toggles multiple and Shift-click selects a range. The list shows `N files | M selected | X duplicates found` and highlights duplicates (by content hash) in pink. The right pane renders a read-only, transposed two-column detail table (Header | Value) that is always visible: when a file is selected, it shows that record; when nothing is selected or not yet extracted, it remains visible with empty values. After extraction, the selection is cleared. A status bar at the bottom is now more verbose: it shows loading states (e.g., computing duplicates, loading results), live extraction progress with elapsed time, and completion summaries (saved count and error count).
     Roles tab: placeholder for future functionality.
 
 ## Batch Mode
