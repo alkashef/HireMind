@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 from dotenv import load_dotenv
 
 
@@ -34,6 +34,14 @@ def log(message: str) -> None:
 def get_default_folder() -> str:
     _load_env()
     return os.getenv("DEFAULT_FOLDER", str(Path.home()))
+
+
+def get_data_path() -> Path:
+    """Return base data folder from env (DATA_PATH) or default 'data'."""
+    _load_env()
+    base = Path(os.getenv("DATA_PATH", "data"))
+    base.mkdir(parents=True, exist_ok=True)
+    return base
 
 
 def list_docs(folder: str) -> List[str]:
@@ -109,6 +117,47 @@ def api_pick_folder():
     files = list_docs(path)
     log(f"Folder picked -> {path} | {len(files)} items")
     return jsonify({"folder": path, "files": files})
+
+
+@app.route("/api/extract", methods=["POST"])
+def api_extract():
+    """Persist selected file metadata to CSV under data/data_applicants.csv.
+
+    Body: { "files": ["C:/path/file1.pdf", ...] }
+    Writes rows with columns: filename, timestamp, id
+    """
+    try:
+        payload = request.get_json(silent=True) or {}
+        files = payload.get("files") or []
+
+        data_dir = get_data_path()
+        csv_path = data_dir / "data_applicants.csv"
+
+        # Prepare CSV
+        import csv
+        import uuid
+
+        is_new = not csv_path.exists()
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        saved = 0
+        stamp = datetime.now().isoformat()
+
+        with csv_path.open("a", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            if is_new:
+                # Column order per requirement
+                writer.writerow(["filename", "timestamp", "id"])
+            for fp in files:
+                filename = str(Path(fp).name)
+                uid = str(uuid.uuid4())
+                writer.writerow([filename, stamp, uid])
+                saved += 1
+
+        log(f"Extract saved {saved} rows -> {csv_path}")
+        return jsonify({"saved": saved, "csv": str(csv_path)})
+    except Exception as e:
+        log(f"Extract error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":

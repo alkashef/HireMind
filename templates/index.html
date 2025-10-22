@@ -13,7 +13,7 @@
     </div>
 
     <div id="paneApplicants" class="tab-pane active" role="tabpanel" aria-labelledby="tabApplicants">
-      <label class="folder-label" for="folderPath">Select CVs Folder</label>
+  <label class="folder-label" for="folderPath">CVs Repository:</label>
       <div class="row">
         <div class="path-box">
           <input id="folderPath" type="text" readonly placeholder="No folder selected" />
@@ -22,6 +22,12 @@
         <button id="refreshBtn" title="Refresh list">Refresh</button>
       </div>
       <div id="list" class="list"></div>
+      <div class="list-footer">
+        <span id="fileCount" class="file-count"></span>
+        <div class="actions">
+          <button id="extractBtn">Extract</button>
+        </div>
+      </div>
     </div>
 
     <div id="paneRoles" class="tab-pane" role="tabpanel" aria-labelledby="tabRoles">
@@ -35,18 +41,47 @@
         return await r.json();
       }
 
+      const selected = new Set();
+
+      function updateFooter(total) {
+        const countEl = document.getElementById('fileCount');
+        const totalNum = Number(total) || 0;
+        const selNum = selected.size || 0;
+        countEl.textContent = `${totalNum} file${totalNum === 1 ? '' : 's'} | ${selNum} selected`;
+      }
+
       function renderList(folder, files) {
         const box = document.getElementById('list');
         document.getElementById('folderPath').value = folder || '';
+        selected.clear();
+        updateFooter(0);
         if (!folder) {
           box.innerHTML = '<div class="muted">No folder selected.</div>';
+          updateFooter(0);
           return;
         }
         if (!files || files.length === 0) {
           box.innerHTML = `<div class="muted">No .pdf or .docx files in: ${folder}</div>`;
+          updateFooter(0);
           return;
         }
-        box.innerHTML = files.map(f => `<div class="item">${f}</div>`).join('');
+        box.innerHTML = files.map(f => `<div class="item" data-path="${encodeURIComponent(f)}">${f}</div>`).join('');
+        updateFooter(files.length);
+
+        // Attach click handlers for selection toggle (multi-select)
+        box.querySelectorAll('.item').forEach(el => {
+          el.addEventListener('click', () => {
+            const p = decodeURIComponent(el.getAttribute('data-path'));
+            if (el.classList.contains('selected')) {
+              el.classList.remove('selected');
+              selected.delete(p);
+            } else {
+              el.classList.add('selected');
+              selected.add(p);
+            }
+            updateFooter(files.length);
+          });
+        });
       }
 
       async function loadDefault() {
@@ -68,6 +103,29 @@
       });
 
       document.getElementById('refreshBtn').addEventListener('click', loadDefault);
+
+      // Extract button handler -> call backend API
+      document.getElementById('extractBtn').addEventListener('click', async () => {
+        const picked = Array.from(selected);
+        if (picked.length === 0) {
+          alert('Select one or more files to extract.');
+          return;
+        }
+        try {
+          const r = await fetch('/api/extract', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ files: picked }),
+          });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || 'Extraction failed');
+          alert(`Saved ${j.saved} row(s) to CSV`);
+          console.log('CSV path:', j.csv);
+        } catch (e) {
+          console.error(e);
+          alert(`Error: ${e.message || e}`);
+        }
+      });
 
       loadDefault();
 

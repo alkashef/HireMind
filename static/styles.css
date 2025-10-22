@@ -5,10 +5,20 @@ label { display: block; margin-bottom: 6px; }
 .folder-label { font-weight: 400; color: #444; font-size: 12px; }
 input[readonly] { width: 100%; padding: 8px; }
 button { padding: 8px 12px; cursor: pointer; }
-.list { margin-top: 16px; border: 1px solid #ddd; border-radius: 6px; padding: 8px; max-height: 360px; overflow: auto; }
+.list { margin-top: 16px; border: 1px solid #ddd; border-radius: 6px; padding: 8px; max-height: 180px; overflow: auto; }
 .item { padding: 6px 4px; border-bottom: 1px solid #f1f1f1; font-size: 14px; }
 .item:last-child { border-bottom: none; }
 .muted { color: #666; }
+
+/* Selectable items */
+.item { cursor: pointer; }
+.item:hover { background: #f7faff; }
+.item.selected { background: #e7f1ff; }
+
+/* Footer under list */
+.list-footer { display: flex; justify-content: flex-start; align-items: flex-start; gap: 8px; margin-top: 6px; }
+.list-footer .actions { margin-left: auto; }
+.file-count { color: #999; font-size: 12px; }
 
 /* Tabs */
 .tabs { border-bottom: 1px solid #e5e5e5; display: flex; gap: 12px; margin-bottom: 16px; }

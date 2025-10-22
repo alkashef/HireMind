@@ -4,11 +4,21 @@ SHORT DESCRIPTION
 
 ## Overview
 
+HireMind orchestrates a CV extraction workflow that feeds candidate documents through an OpenAI agent and consolidates normalized fields into CSV files stored under `data/`.
+
 ## Key Features
+
+- Batch CV ingestion with structured CSV export to `data/cv_extractions.csv`
+- Streamlit UI for configuring folders, triggering runs, and downloading results
+- Flask utility endpoints for browsing local folders inside the desktop helper app
 
 ## Technology Stack
 
 ## Important Files:
+- `app.py` – Flask helper for the desktop folder browser UI
+- `ui/streamlit_app.py` – Streamlit front-end for running extractions
+- `services/cv_processor.py` – batch processor that writes CSV output to `data/`
+- `config/.env` – runtime configuration (mirrored by `config/.env-example`)
 
 ## Setup for Development
 
@@ -85,6 +95,13 @@ TD_USER=your-username
 TD_PASSWORD=your-password
 TD_PORT=1025
 
+### Data Path
+Set the base data folder in `config/.env`:
+
+DATA_PATH=data
+
+The Extract action writes rows to `DATA_PATH/data_applicants.csv` with columns: `filename,timestamp,id`.
+
 ### How to Test
 
 Run tests to verify the application components are working correctly:
@@ -124,7 +141,7 @@ This starts the web server on http://localhost:5000, where you can:
     Execute queries and view results
 
 Additionally, the current UI includes:
-    Applicants tab: use "select CVs folder:" and the Browse button to choose a local folder; the list shows .pdf and .docx files in that folder.
+    Applicants tab: use "CVs Repository:" and the Browse button to choose a local folder; the list shows .pdf and .docx files, supports multi-select, shows `N files | M selected` beneath the list, and provides an "Extract" button that saves file metadata to `data/data_applicants.csv`.
     Roles tab: placeholder for future functionality.
 
 ## Batch Mode
