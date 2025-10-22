@@ -14,6 +14,7 @@ button { padding: 8px 12px; cursor: pointer; }
 .item { cursor: pointer; }
 .item:hover { background: #f7faff; }
 .item.selected { background: #e7f1ff; }
+.item.duplicate { background: #ffe6f0; }
 
 /* Footer under list */
 .list-footer { display: flex; justify-content: flex-start; align-items: flex-start; gap: 8px; margin-top: 6px; }
@@ -36,6 +37,10 @@ button { padding: 8px 12px; cursor: pointer; }
 .tab-btn.active { border-bottom-color: #0078d4; color: #0078d4; }
 .tab-pane { display: none; }
 .tab-pane.active { display: block; }
+
+/* Status bar */
+.status-bar { position: fixed; left: 0; right: 0; bottom: 0; width: 100%; resize: none; min-height: 28px; max-height: 60px; font-size: 12px; color: #333; background: #fafafa; border-top: 1px solid #e5e5e5; padding: 6px 8px; box-sizing: border-box; z-index: 100; }
+body { padding-bottom: 48px; }
 
 /* Two-pane layout: left list (50%) and right details (50%) */
 .content-row { display: flex; gap: 16px; align-items: flex-start; margin-top: 8px; }

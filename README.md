@@ -4,11 +4,12 @@ SHORT DESCRIPTION
 
 ## Overview
 
-HireMind orchestrates a CV extraction workflow that feeds candidate documents through an OpenAI agent and consolidates normalized fields into CSV files stored under `data/`.
+HireMind orchestrates a CV extraction workflow that feeds candidate documents through the OpenAI API and consolidates normalized fields into CSV files stored under `data/`.
 
 ## Key Features
 
-- Batch CV ingestion with structured CSV export to `data/cv_extractions.csv`
+- Batch CV ingestion with structured CSV export to `data/data_applicants.csv`
+- Rich server-side logging for key events (listing, picks, hashing, extraction, OpenAI calls)
 - Streamlit UI for configuring folders, triggering runs, and downloading results
 - Flask utility endpoints for browsing local folders inside the desktop helper app
 
@@ -100,9 +101,8 @@ Set the base data folder in `config/.env`:
 
 DATA_PATH=data
 
-The Extract action writes rows to `DATA_PATH/data_applicants.csv` with columns: `ID,Timestamp,CV`.
-
-Extraction is idempotent: each CV filename appears at most once in the CSV, with a single stable ID. Re-running Extract on already-recorded files won’t create duplicates; new rows are added only for files not yet present. Existing duplicates (if any from older runs) are automatically deduplicated on the next Extract, keeping the first occurrence.
+The Extract action writes rows to `DATA_PATH/data_applicants.csv` with columns: `ID,Timestamp,CV,FullName`.
+IDs are SHA-256 content hashes of files; identical-content files share the same ID (last write wins for CV name).
 
 ### How to Test
 
@@ -143,7 +143,7 @@ This starts the web server on http://localhost:5000, where you can:
     Execute queries and view results
 
 Additionally, the current UI includes:
-    Applicants tab: use "CVs Repository:" and the Browse button to choose a local folder. The top bar includes a Refresh button to reload the list. The UI is split: left pane (50% width) shows the file list with filenames only (no full paths) and a footer with Select All and Extract buttons; single-click selects one file, while Ctrl/⌘-click toggles multiple and Shift-click selects a range. The list shows `N files | M selected`. The right pane renders a read-only, transposed two-column detail table (Header | Value) for the single selected record (scrollable, constrained height). After extraction, the selection is cleared.
+    Applicants tab: use "CVs Repository:" and the Browse button to choose a local folder. The top bar includes a Refresh button to reload the list. The UI is split: left pane (50% width) shows the file list with filenames only (no full paths) and a footer with Select All and Extract buttons; single-click selects one file, while Ctrl/⌘-click toggles multiple and Shift-click selects a range. The list shows `N files | M selected | X duplicates found` and highlights duplicates (by content hash) in pink. The right pane renders a read-only, transposed two-column detail table (Header | Value) for the single selected record (scrollable, constrained height). If the selected file hasn't been extracted yet, the detail shows `Status | Not extracted yet`. After extraction, the selection is cleared. A status bar at the bottom shows success/errors.
     Roles tab: placeholder for future functionality.
 
 ## Batch Mode

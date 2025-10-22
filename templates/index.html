@@ -56,11 +56,13 @@
       const selected = new Set();
       let lastSelectedIndex = null; // track last clicked index for shift-range
 
+      let duplicateCount = 0;
       function updateFooter(total) {
         const countEl = document.getElementById('fileCount');
         const totalNum = Number(total) || 0;
         const selNum = selected.size || 0;
-        countEl.textContent = `${totalNum} file${totalNum === 1 ? '' : 's'} | ${selNum} selected`;
+        const dupText = duplicateCount > 0 ? ` | ${duplicateCount} duplicates found` : '';
+        countEl.textContent = `${totalNum} file${totalNum === 1 ? '' : 's'} | ${selNum} selected${dupText}`;
       }
 
       let tableRows = [];
@@ -76,11 +78,12 @@
         const cvName = getSingleSelectedBasename();
         if (!cvName) { tbody.innerHTML = ''; return; }
         const rec = tableRows.find(r => (r.cv || '') === cvName);
-        if (!rec) { tbody.innerHTML = ''; return; }
+        if (!rec) { tbody.innerHTML = ''; const sb=document.getElementById('statusBar'); if (sb) sb.value = 'Not extracted yet'; return; }
         const pairs = [
           ['ID', rec.id || ''],
           ['Timestamp', rec.timestamp || ''],
           ['CV', rec.cv || ''],
+          ['Full Name', rec.full_name || ''],
         ];
         tbody.innerHTML = pairs.map(([h, v]) => `<tr><td>${h}</td><td>${v}</td></tr>`).join('');
       }
@@ -93,6 +96,29 @@
           renderDetailForSelection();
         } catch (e) {
           console.error('Failed to load table rows', e);
+        }
+      }
+
+      async function highlightDuplicates(files) {
+        try {
+          const r = await fetch('/api/hashes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ files }),
+          });
+          const j = await r.json();
+          const dups = new Set((j.duplicates || []).map(String));
+          duplicateCount = Number(j.duplicate_count || 0);
+          document.querySelectorAll('#list .item').forEach(el => {
+            const p = decodeURIComponent(el.getAttribute('data-path'));
+            el.classList.toggle('duplicate', dups.has(p));
+          });
+        } catch (e) {
+          console.error('Failed to compute duplicates', e);
+          duplicateCount = 0;
+        } finally {
+          const items = Array.from(document.querySelectorAll('#list .item'));
+          updateFooter(items.length);
         }
       }
 
@@ -116,6 +142,8 @@
             return `<div class="item" data-index="${i}" data-path="${encodeURIComponent(f)}">${name}</div>`;
           }).join('');
         updateFooter(files.length);
+        // compute duplicate highlighting by content hash
+        highlightDuplicates(files);
 
         // Attach click handlers for selection toggle (multi-select)
         const items = Array.from(box.querySelectorAll('.item'));
@@ -225,14 +253,20 @@
           selected.clear();
           updateFooter(items.length);
           renderDetailForSelection();
+          // Update status bar with any errors summary
+          const status = document.getElementById('statusBar');
+          const errs = Array.isArray(j.errors) ? j.errors : [];
+          status.value = errs.length ? `Errors: ${errs.join(' | ')}` : `Saved: ${j.saved}`;
         } catch (e) {
           console.error(e);
           // no user alert on error per requirement
+          const status = document.getElementById('statusBar');
+          status.value = `Error: ${e.message || e}`;
         }
       });
 
-      loadDefault();
-      refreshTable();
+  loadDefault();
+  refreshTable();
 
       // Tabs logic
       const tabApplicants = document.getElementById('tabApplicants');
@@ -253,5 +287,6 @@
       tabApplicants.addEventListener('click', () => activate('applicants'));
       tabRoles.addEventListener('click', () => activate('roles'));
     </script>
+    <textarea id="statusBar" class="status-bar" rows="1" readonly placeholder="Status..."></textarea>
   </body>
   </html>
