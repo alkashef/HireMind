@@ -19,6 +19,7 @@ HireMind orchestrates a CV extraction workflow that feeds candidate documents th
 - `app.py` – Flask helper for the desktop folder browser UI
 - `ui/streamlit_app.py` – Streamlit front-end for running extractions
 - `services/cv_processor.py` – batch processor that writes CSV output to `data/`
+- `prompts/` – prompt templates used by the OpenAI extraction flow (e.g., `cv_full_name_system.md`, `cv_full_name_user.md`)
 - `config/.env` – runtime configuration (mirrored by `config/.env-example`)
 
 ## Setup for Development
@@ -104,6 +105,10 @@ DATA_PATH=data
 The Extract action writes rows to `DATA_PATH/data_applicants.csv` with columns: `ID,Timestamp,CV,FullName`.
 IDs are SHA-256 content hashes of files; identical-content files share the same ID (last write wins for CV name).
 
+Pinned SDK version
+
+- This project pins the OpenAI Python SDK (see requirements.txt) to ensure the Responses API supports `response_format=json_object` for strict JSON output. If you previously installed a different version globally, reinstall with `pip install -r requirements.txt` to avoid runtime errors like `Responses.create() got an unexpected keyword argument 'response_format'`.
+
 ### How to Test
 
 Run tests to verify the application components are working correctly:
@@ -134,7 +139,7 @@ Web UI Mode (Default)
 
 python app.py
 
-This starts the web server on http://localhost:5000, where you can:
+This starts the web server on http://localhost:5000. On launch, the log will include entries like `APP_START` (server starting) and `APP_READY` (first request can be served). You can then:
 
     Connect to the database
     Load the AI model

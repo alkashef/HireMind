@@ -9,7 +9,6 @@
 - Ignore the `archive` folder.
 - Use standard libraries or popular ones (e.g., pandas, requests, langchain, openai).
 - Match library usage to the versions specified in `requirements.txt`.
-- For OpenAI SDK (openai>=1.30), use the modern client: `from openai import OpenAI` and `client.chat.completions.create(...)`.
 
 ## Code Style & Behavior
 - Follow Pythonic style, adhering to PEP 8 standards.

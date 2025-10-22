@@ -39,6 +39,14 @@ def log_kv(event: str, **fields: object) -> None:
     log(msg)
 
 
+# Log once when the app handles the first request (Flask 3.x safe)
+@app.before_request
+def _app_ready() -> None:
+    if not app.config.get("_APP_READY_LOGGED"):
+        log("APP_READY")
+        app.config["_APP_READY_LOGGED"] = True
+
+
 def get_default_folder() -> str:
     _load_env()
     return os.getenv("DEFAULT_FOLDER", str(Path.home()))
@@ -98,38 +106,74 @@ def extract_full_name_with_openai(file_path: Path) -> tuple[str | None, str | No
         if not api_key:
             return None, "OPENAI_API_KEY not set"
         from openai import OpenAI
+        import openai as openai_pkg  # for version reporting
         client = OpenAI()
+
+        # Ensure Responses API is available in the installed SDK
+        if not hasattr(client, "responses"):
+            ver = getattr(openai_pkg, "__version__", "unknown")
+            return None, f"OpenAI SDK {ver} does not support Responses API. Please install pinned version from requirements.txt."
+
+        # Load prompts from files
+        def _load_prompt(name: str) -> str:
+            p = Path(__file__).resolve().parent / "prompts" / name
+            try:
+                return p.read_text(encoding="utf-8").strip()
+            except Exception as e:
+                # No fallback per project policy; surface the error
+                raise RuntimeError(f"Prompt load failed: {name} -> {e}")
+
+        system_text = _load_prompt("cv_full_name_system.md")
+        user_text = _load_prompt("cv_full_name_user.md")
 
         # Upload the file and force JSON extraction
         up = client.files.create(file=file_path.open("rb"), purpose="assistants")
-
-        system_text = (
-            "You extract fields from the attached CV. "
-            'Return strict JSON: {"full_name":""}. If unknown, use empty string.'
-        )
-        response = client.responses.create(
-            model=get_openai_model(),
-            input=[
-                {"role": "system", "content": [{"type": "text", "text": system_text}]},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": "Extract the candidate's full legal name as JSON with key full_name."}
-                    ],
-                    "attachments": [
-                        {"file_id": up.id, "tools": [{"type": "file_search"}]}
-                    ],
-                },
-            ],
-            tools=[{"type": "file_search"}],
-            response_format={"type": "json_object"},
-        )
+        # Attempt with JSON response formatting; if SDK doesn't support response_format, retry without it
+        try:
+            response = client.responses.create(
+                model=get_openai_model(),
+                input=[
+                    {"role": "system", "content": [{"type": "text", "text": system_text}]},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": user_text}
+                        ],
+                        "attachments": [
+                            {"file_id": up.id, "tools": [{"type": "file_search"}]}
+                        ],
+                    },
+                ],
+                tools=[{"type": "file_search"}],
+                response_format={"type": "json_object"},
+            )
+        except TypeError:
+            # Fallback for older SDKs lacking response_format
+            response = client.responses.create(
+                model=get_openai_model(),
+                input=[
+                    {"role": "system", "content": [{"type": "text", "text": system_text}]},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": user_text}
+                        ],
+                        "attachments": [
+                            {"file_id": up.id, "tools": [{"type": "file_search"}]}
+                        ],
+                    },
+                ],
+                tools=[{"type": "file_search"}],
+            )
 
         # Extract JSON content
-        try:
-            content = response.output[0].content[0].text
-        except Exception:
-            content = getattr(response, "output_text", None) or ""
+        # Prefer output_text when available, else attempt to access structured output
+        content = getattr(response, "output_text", None)
+        if not content:
+            try:
+                content = response.output[0].content[0].text
+            except Exception:
+                content = ""
         import json
         data = json.loads(content) if content else {}
         full_name = data.get("full_name") or ""
@@ -356,4 +400,16 @@ def api_extract():
 
 
 if __name__ == "__main__":
+    # Log application launch with OpenAI SDK diagnostics
+    try:
+        import openai as _openai_diag
+        from openai import OpenAI as _OpenAI
+        _ver = getattr(_openai_diag, "__version__", "unknown")
+        try:
+            _has_responses = hasattr(_OpenAI(), "responses")
+        except Exception:
+            _has_responses = False
+        log_kv("APP_START", host="127.0.0.1", port=5000, debug=True, openai_version=_ver, has_responses=_has_responses)
+    except Exception as _e:
+        log_kv("APP_START", host="127.0.0.1", port=5000, debug=True, openai_diag_error=_e)
     app.run(host="127.0.0.1", port=5000, debug=True)

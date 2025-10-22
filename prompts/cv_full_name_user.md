@@ -1,0 +1,1 @@
+Extract the candidate's full legal name from the attached CV and return JSON with the key "full_name".
