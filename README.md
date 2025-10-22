@@ -39,6 +39,12 @@ conda install pip
 pip install -r requirements.txt
 ```
 
+Verify the OpenAI SDK and Responses API support using the same interpreter:
+```
+python -c "import openai; print('openai', openai.__version__); from openai import OpenAI; print('has_responses', hasattr(OpenAI(), 'responses'))"
+```
+Expected: `has_responses True`. If it's False, ensure you're installing with the same Python: `python -m pip install -r requirements.txt`.
+
 ### GPU Configuration
 
 Download and install the Nvidia driver appropriate for your GPU
@@ -139,7 +145,7 @@ Web UI Mode (Default)
 
 python app.py
 
-This starts the web server on http://localhost:5000. On launch, the log will include entries like `APP_START` (server starting) and `APP_READY` (first request can be served). You can then:
+This starts the web server on http://localhost:5000. On launch, the log will include entries like `APP_START` (server starting) and `APP_READY` (first request can be served). The `APP_START` log also includes `openai_version` and `has_responses` to help diagnose SDK mismatches. You can then:
 
     Connect to the database
     Load the AI model
