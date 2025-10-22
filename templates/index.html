@@ -28,6 +28,16 @@
           <button id="extractBtn">Extract</button>
         </div>
       </div>
+      <div class="table-toolbar">
+        <label for="tableFilter" class="folder-label" style="margin-top:6px;">Filter:</label>
+        <input id="tableFilter" type="text" placeholder="Type to filter rows..." />
+      </div>
+      <table id="extractTable" class="data-table" aria-label="Extracted info">
+        <thead>
+          <tr><th>filename</th><th>timestamp</th><th>id</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
     </div>
 
     <div id="paneRoles" class="tab-pane" role="tabpanel" aria-labelledby="tabRoles">
@@ -48,6 +58,36 @@
         const totalNum = Number(total) || 0;
         const selNum = selected.size || 0;
         countEl.textContent = `${totalNum} file${totalNum === 1 ? '' : 's'} | ${selNum} selected`;
+      }
+
+      let tableRows = [];
+
+      function renderTable(filterText = '') {
+        const tbody = document.querySelector('#extractTable tbody');
+        const ft = (filterText || '').toLowerCase();
+        const rows = tableRows.filter(r => {
+          if (!ft) return true;
+          return (
+            (r.filename || '').toLowerCase().includes(ft) ||
+            (r.timestamp || '').toLowerCase().includes(ft) ||
+            (r.id || '').toLowerCase().includes(ft)
+          );
+        });
+        tbody.innerHTML = rows.map(r => (
+          `<tr><td>${r.filename || ''}</td><td>${r.timestamp || ''}</td><td>${r.id || ''}</td></tr>`
+        )).join('');
+      }
+
+      async function refreshTable() {
+        try {
+          const r = await fetch('/api/extract');
+          const j = await r.json();
+          tableRows = Array.isArray(j.rows) ? j.rows : [];
+          const tf = document.getElementById('tableFilter');
+          renderTable(tf.value);
+        } catch (e) {
+          console.error('Failed to load table rows', e);
+        }
       }
 
       function renderList(folder, files) {
@@ -104,10 +144,11 @@
 
       document.getElementById('refreshBtn').addEventListener('click', loadDefault);
 
-      // Extract button handler -> call backend API
+      // Extract button handler -> call backend API (no alerts on success)
       document.getElementById('extractBtn').addEventListener('click', async () => {
         const picked = Array.from(selected);
         if (picked.length === 0) {
+          // Keep a minimal UX hint for empty selection
           alert('Select one or more files to extract.');
           return;
         }
@@ -119,15 +160,20 @@
           });
           const j = await r.json();
           if (!r.ok) throw new Error(j.error || 'Extraction failed');
-          alert(`Saved ${j.saved} row(s) to CSV`);
-          console.log('CSV path:', j.csv);
+          // silently refresh table; no message shown
+          await refreshTable();
         } catch (e) {
           console.error(e);
-          alert(`Error: ${e.message || e}`);
+          // no user alert on error per requirement
         }
       });
 
       loadDefault();
+      refreshTable();
+
+      document.getElementById('tableFilter').addEventListener('input', (e) => {
+        renderTable(e.target.value);
+      });
 
       // Tabs logic
       const tabApplicants = document.getElementById('tabApplicants');

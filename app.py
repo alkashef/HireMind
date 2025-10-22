@@ -119,7 +119,7 @@ def api_pick_folder():
     return jsonify({"folder": path, "files": files})
 
 
-@app.route("/api/extract", methods=["POST"])
+@app.route("/api/extract", methods=["POST", "GET"])
 def api_extract():
     """Persist selected file metadata to CSV under data/data_applicants.csv.
 
@@ -127,13 +127,26 @@ def api_extract():
     Writes rows with columns: filename, timestamp, id
     """
     try:
-        payload = request.get_json(silent=True) or {}
-        files = payload.get("files") or []
-
         data_dir = get_data_path()
         csv_path = data_dir / "data_applicants.csv"
 
-        # Prepare CSV
+        # Serve rows
+        if request.method == "GET":
+            if not csv_path.exists():
+                return jsonify({"rows": []})
+            import csv
+            with csv_path.open("r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f)
+                rows = [
+                    {"filename": r.get("filename", ""), "timestamp": r.get("timestamp", ""), "id": r.get("id", "")}
+                    for r in reader
+                ]
+            return jsonify({"rows": rows})
+
+        # Append rows
+        payload = request.get_json(silent=True) or {}
+        files = payload.get("files") or []
+
         import csv
         import uuid
 
@@ -145,7 +158,6 @@ def api_extract():
         with csv_path.open("a", encoding="utf-8", newline="") as f:
             writer = csv.writer(f)
             if is_new:
-                # Column order per requirement
                 writer.writerow(["filename", "timestamp", "id"])
             for fp in files:
                 filename = str(Path(fp).name)
