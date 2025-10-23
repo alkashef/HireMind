@@ -22,6 +22,13 @@ HireMind orchestrates a CV extraction workflow that feeds candidate documents th
 
 ## Technology Stack
 
+### ChromaDB Vector Database
+ChromaDB is used to store and search vector embeddings for applicants and roles. It enables semantic search, similarity matching, and retrieval-augmented generation (RAG).
+
+- Embeddings are stored using the same unique IDs as in the CSV files.
+- The database is stored locally at `data/chromadb/` (configurable via `CHROMADB_PATH` in `.env`).
+- Integration code is in `utils/chromadb_store.py`.
+
 ## Important Files:
 - `app.py` – Flask app exposing the UI and API endpoints
 - `templates/index.html` – single-page UI (file list + details table + status bar)
