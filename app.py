@@ -211,7 +211,7 @@ def api_roles_pick_folder():
 
 @app.route("/api/roles/extract", methods=["POST", "GET"])
 def api_roles_extract():
-    """Persist selected role files to CSV under data/data_roles.csv.
+    """Persist selected role files to CSV under data/roles.csv.
 
     Body: { "files": ["C:/path/file1.pdf", ...] }
     Columns: ID (sha256), Timestamp, Filename, RoleTitle (parsed from filename by default)
