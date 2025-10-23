@@ -60,6 +60,8 @@ body { padding-bottom: 48px; }
 .detail-pane { min-height: 0; overflow-y: auto; overflow-x: hidden; }
 #detailCol1 { grid-column: 2; grid-row: 2; }
 #detailCol2 { grid-column: 3; grid-row: 2; }
+/* Roles detail column should align with applicants detail column */
+#roleDetailCol1 { grid-column: 2; grid-row: 2; }
 /* Container around detail tables */
 .tables-container { border: 1px solid #ddd; border-radius: 6px; padding: 8px; height: calc(100% - var(--list-footer-height) - 16px); overflow-y: auto; overflow-x: hidden; background: #fff; margin-top: 16px; }
 .table-title { color: #666; font-weight: 600; margin-top: 8px; }
@@ -67,6 +69,13 @@ body { padding-bottom: 48px; }
 /* Make scrollable areas fill available vertical space */
 .left-content .list { flex: 1 1 auto; }
 .left-content .list-footer { flex: 0 0 auto; }
+
+/* Roles pane: align tables container vertically with the top of the file list
+	and make both the same height. Target only the Roles pane to avoid
+	affecting Applicants layout. */
+#paneRoles .left-content .list { margin-top: 0; }
+#paneRoles #roleDetailCol1 { display: flex; flex-direction: column; }
+#paneRoles #roleDetailCol1 .tables-container { margin-top: 0; height: calc(100% - var(--list-footer-height)); }
 
 /* Responsive left cell width to reduce risk of horizontal scrollbars */
 @media (max-width: 1400px) {

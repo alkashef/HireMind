@@ -189,10 +189,8 @@ function renderRolesList(folder, files) {
 // Render details for a single role into the two detail columns to match applicants UI
 function renderRoleDetailsForPath(path) {
   const col1 = document.getElementById('roleTablesCol1');
-  const col2 = document.getElementById('roleTablesCol2');
-  if (!col1 || !col2) return;
+  if (!col1) return;
   col1.innerHTML = '';
-  col2.innerHTML = '';
   if (!path) return;
   const basename = (path || '').toString().split(/[\\/]/).pop();
   const row = (rolesTableRows || []).find(r => {
@@ -217,8 +215,5 @@ function renderRoleDetailsForPath(path) {
   ];
   const title = [['Role title', row.role_title || '']];
 
-  col1.innerHTML = mkTable('Role', title) + mkTable('Metadata', meta);
-  // column 2 reserved for future role-specific fields; show placeholders for now
-  const extra = [];
-  col2.innerHTML = mkTable('Additional', extra.length ? extra : [['Note', 'No additional extracted fields']]);
+  col1.innerHTML = mkTable('Role', title) + mkTable('Metadata', meta) + mkTable('Additional', [['Note', 'No additional extracted fields']]);
 }

@@ -13,8 +13,7 @@ from flask import Flask, jsonify, render_template, request
 from config.settings import AppConfig
 from utils.logger import AppLogger
 from utils.openai_manager import OpenAIManager
-from utils.csv_store import CSVStore
-from utils.roles_store import RolesStore
+from utils.csv_manager import CSVStore, RolesStore
 
 
 app = Flask(__name__)
@@ -431,6 +430,7 @@ def api_extract():
                     "ID": rid,
                     "Timestamp": stamp,
                     "CV": cv_name,
+                    "Filename": cv_name,
                     # Personal Information
                     "PersonalInformation_FirstName": val("first_name"),
                     "PersonalInformation_LastName": val("last_name"),

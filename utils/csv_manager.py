@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 from config.settings import AppConfig
 from utils.logger import AppLogger
@@ -13,8 +13,8 @@ class CSVStore:
 
     Contract:
     - Storage file: data/applicants.csv
-    - Columns (in file): ID, Timestamp, CV, FullName
-    - Public rows (for UI): id, timestamp, cv, full_name
+    - Columns (in file): ID, Timestamp, CV, Filename, FullName (and other prefixed columns)
+    - Public rows (for UI): id, timestamp, cv, filename, full_name
     """
 
     FILE_NAME = "applicants.csv"
@@ -68,7 +68,7 @@ class CSVStore:
     def get_public_rows(self) -> List[dict]:
         """Return rows for UI consumption with normalized keys.
 
-        Each row is shaped as: {id, timestamp, cv, full_name}.
+        Each row is shaped as: {id, timestamp, cv, filename, full_name}.
         """
         p = self.csv_path
         if not p.exists():
@@ -169,3 +169,40 @@ class CSVStore:
         except Exception as e:
             self.logger.log_kv("CSV_WRITE_ROWS_ERROR", error=e, path=str(p))
             raise
+
+
+class RolesStore(CSVStore):
+    """CSV store for roles data, using CSVStore utility."""
+    FILE_NAME = "roles.csv"
+    HEADER = [
+        "ID",
+        "Timestamp",
+        "Filename",
+        "RoleTitle",
+    ]
+
+    def get_public_rows(self) -> list[dict]:
+        """Return rows for UI consumption with normalized keys."""
+        rows = []
+        p = self.csv_path
+        if not p.exists():
+            self.logger.log_kv("ROLES_CSV_GET_ROWS", rows=0, exists=False)
+            return []
+        try:
+            with p.open("r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f)
+                for r in reader:
+                    rid = r.get("ID") or r.get("id") or r.get("Id") or ""
+                    ts = r.get("Timestamp") or r.get("timestamp") or ""
+                    fn = r.get("Filename") or r.get("filename") or r.get("file") or ""
+                    title = r.get("RoleTitle") or r.get("role_title") or ""
+                    rows.append({
+                        "id": rid,
+                        "timestamp": ts,
+                        "filename": fn,
+                        "role_title": title,
+                    })
+            self.logger.log_kv("ROLES_CSV_GET_ROWS", rows=len(rows), exists=True)
+        except Exception as e:
+            self.logger.log_kv("ROLES_CSV_GET_ROWS_ERROR", error=e)
+        return rows
