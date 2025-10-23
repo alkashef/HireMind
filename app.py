@@ -102,7 +102,8 @@ def index():
 @app.route("/api/default-folder")
 def api_default_folder():
     folder = get_default_folder()
-    log_kv("DEFAULT_FOLDER", folder=folder)
+    # Log with updated env naming for clarity
+    log_kv("APPLICANTS_FOLDER", folder=folder)
     return jsonify({"folder": folder})
 
 
@@ -116,7 +117,7 @@ def api_list_files():
 @app.route("/api/roles/default-folder")
 def api_roles_default_folder():
     folder = get_roles_default_folder()
-    log_kv("ROLES_DEFAULT_FOLDER", folder=folder)
+    log_kv("ROLES_FOLDER", folder=folder)
     return jsonify({"folder": folder})
 
 @app.route("/api/roles/list-files")
@@ -347,7 +348,7 @@ def api_hashes():
 
 @app.route("/api/extract", methods=["POST", "GET"])
 def api_extract():
-    """Persist selected file metadata to CSV under data/data_applicants.csv.
+    """Persist selected file metadata to CSV under data/applicants.csv.
 
     Body: { "files": ["C:/path/file1.pdf", ...] }
     Writes/updates rows with columns: ID, Timestamp, CV, FullName

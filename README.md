@@ -8,8 +8,8 @@ HireMind orchestrates a CV extraction workflow that feeds candidate documents th
 
 ## Key Features
 
-- Batch CV ingestion with structured CSV export to `data/data_applicants.csv`
-- Rich server-side logging for key events (listing, picks, hashing, extraction, OpenAI calls)
+- Batch CV ingestion with structured CSV export to `data/applicants.csv`
+- Rich server-side logging for key events (listing, picks, hashing, extraction, OpenAI calls; folder events use APPLICANTS_FOLDER and ROLES_FOLDER)
 - Flask single-page UI for browsing folders, selecting CVs, triggering extraction, and viewing results
 - UI now uses a 3-column layout: left-most column for the CV file list (with Select All and Extract), and two columns for details split into 6 titled sections (Personal Information, Experience, Stability, Professionalism, Socioeconomic Standard, Flags). Section titles are grey text above each table; tables share a consistent left-column width.
  - Roles tab mirrors the Applicants left-side layout: Roles Repository picker (path text box + Browse + Refresh) and a list of .pdf/.docx role files.
@@ -27,7 +27,7 @@ HireMind orchestrates a CV extraction workflow that feeds candidate documents th
 - `templates/index.html` – single-page UI (file list + details table + status bar)
 - `static/styles.css` – styles, including the fixed first column for the details table
 - `static/status.js` – shared in-app status and progress helpers used by the UI
-- `utils/csv_store.py` – CSVStore encapsulating read/write of `data/data_applicants.csv`
+- `utils/csv_store.py` – CSVStore encapsulating read/write of `data/applicants.csv`
 - `utils/openai_manager.py` – encapsulates OpenAI SDK + HTTP fallback (vector stores, file_search, text.format)
 - `prompts/` – prompt templates used by the OpenAI extraction flow (e.g., `cv_full_name_system.md`, `cv_full_name_user.md`)
 - `config/.env` – runtime configuration (mirrored by `config/.env-example`)
@@ -122,11 +122,12 @@ Set the base data folder in `config/.env`:
 
 DATA_PATH=data
 
-# Roles repository
-# If not set, defaults to DEFAULT_FOLDER
+# Applicants and Roles repositories
+APPLICANTS_FOLDER=C:\Users\<YourUser>\Documents\Applicants
+# If not set, ROLES_FOLDER defaults to APPLICANTS_FOLDER
 ROLES_FOLDER=C:\Users\<YourUser>\Documents\Roles
 
-The Extract action writes rows to `DATA_PATH/data_applicants.csv` with columns: `ID, Timestamp, CV` and category-prefixed fields such as:
+The Extract action writes rows to `DATA_PATH/applicants.csv` with columns: `ID, Timestamp, CV` and category-prefixed fields such as:
 - PersonalInformation_FirstName, PersonalInformation_LastName, PersonalInformation_FullName
 - Professionalism_MisspellingCount, ...
 - Experience_YearsSinceGraduation, Experience_TotalYearsExperience, Experience_EmployerNames
