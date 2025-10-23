@@ -1,1 +1,1 @@
-Extract the candidate's full legal name from the attached CV and return JSON with the key "full_name".
+Extract all requested fields from the attached CV and return exactly one JSON object that matches the schema defined by the system message. Use only the information in this CV. If a field is missing, return an empty string or 0 as appropriate.

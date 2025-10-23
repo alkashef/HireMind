@@ -36,7 +36,16 @@ class AppConfig:
 
     @property
     def default_folder(self) -> str:
-        return os.getenv("DEFAULT_FOLDER", str(Path.home()))
+        """Deprecated alias for applicants_folder (reads APPLICANTS_FOLDER)."""
+        return os.getenv("APPLICANTS_FOLDER", str(Path.home()))
+
+    @property
+    def roles_folder(self) -> str:
+        """Default Roles repository folder.
+
+        Falls back to APPLICANTS_FOLDER when ROLES_FOLDER is not set.
+        """
+        return os.getenv("ROLES_FOLDER", os.getenv("APPLICANTS_FOLDER", str(Path.home())))
 
     @property
     def openai_api_key(self) -> str | None:

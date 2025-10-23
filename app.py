@@ -12,6 +12,9 @@ from flask import Flask, jsonify, render_template, request
 
 from config.settings import AppConfig
 from utils.logger import AppLogger
+from utils.openai_manager import OpenAIManager
+from utils.csv_store import CSVStore
+from utils.roles_store import RolesStore
 
 
 app = Flask(__name__)
@@ -19,6 +22,13 @@ app = Flask(__name__)
 # Centralized config and logger
 config = AppConfig()
 logger = AppLogger(config.log_file_path)
+openai_mgr = OpenAIManager(config, logger)
+csv_store = CSVStore(config, logger)
+roles_store = RolesStore(config, logger)
+
+# In-memory extraction progress (per-process state)
+EXTRACT_PROGRESS: dict = {"active": False, "total": 0, "done": 0, "start": None}
+ROLES_EXTRACT_PROGRESS: dict = {"active": False, "total": 0, "done": 0, "start": None}
 
 
 def log(message: str) -> None:
@@ -40,6 +50,9 @@ def _app_ready() -> None:
 def get_default_folder() -> str:
     return config.default_folder
 
+def get_roles_default_folder() -> str:
+    return config.roles_folder
+
 
 def get_data_path() -> Path:
     return config.data_path
@@ -52,6 +65,10 @@ def list_docs(folder: str) -> List[str]:
         return []
     paths = [str(fp) for fp in p.iterdir() if fp.is_file() and fp.suffix.lower() in exts]
     return sorted(paths)
+
+def list_role_docs(folder: str) -> List[str]:
+    """List role documents (same extensions as CVs)."""
+    return list_docs(folder)
 
 
 def sha256_file(path: Path) -> str:
@@ -70,167 +87,7 @@ def get_max_file_mb() -> int:
 def get_openai_model() -> str:
     return config.openai_model
 
-
-def get_openai_api_key() -> str | None:
-    return config.openai_api_key
-
-
-def extract_full_name_with_openai(file_path: Path) -> tuple[str | None, str | None]:
-    """Call OpenAI Responses API with file attachment to extract full_name.
-
-    Returns (full_name, error_message). If failed, full_name is None and error_message is set.
-    """
-    try:
-        api_key = get_openai_api_key()
-        if not api_key:
-            return None, "OPENAI_API_KEY not set"
-        from openai import OpenAI
-        import openai as openai_pkg  # for version reporting
-        client = OpenAI()
-
-        # Load prompts from files
-        def _load_prompt(name: str) -> str:
-            p = Path(__file__).resolve().parent / "prompts" / name
-            try:
-                return p.read_text(encoding="utf-8").strip()
-            except Exception as e:
-                # No fallback per project policy; surface the error
-                raise RuntimeError(f"Prompt load failed: {name} -> {e}")
-
-        system_text = _load_prompt("cv_full_name_system.md")
-        user_text = _load_prompt("cv_full_name_user.md")
-
-        # Upload the file once; used by both SDK and HTTP fallback
-        up = client.files.create(file=file_path.open("rb"), purpose="assistants")
-
-        # If SDK has Responses, use it; otherwise, fall back to raw HTTP
-        if hasattr(client, "responses"):
-            # Create a temporary vector store and attach the file for file_search
-            vs = client.vector_stores.create(name="hiremind_temp_vs")
-            try:
-                client.vector_stores.files.create(vector_store_id=vs.id, file_id=up.id)
-                log_kv("OPENAI_VECTOR_STORE", id=vs.id)
-                # Latest SDK: use text.format (prefer json_schema for strictness)
-                response = client.responses.create(
-                    model=get_openai_model(),
-                    input=[
-                        {"role": "system", "content": [{"type": "input_text", "text": system_text}]},
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "input_text", "text": user_text},
-                                {"type": "input_file", "file_id": up.id}
-                            ],
-                        },
-                    ],
-                    tools=[{"type": "file_search", "vector_store_ids": [vs.id]}],
-                    text={"format": {"type": "json_object"}},
-                )
-            finally:
-                try:
-                    client.vector_stores.delete(vector_store_id=vs.id)
-                except Exception:
-                    pass
-
-            # Extract JSON content
-            content = getattr(response, "output_text", None)
-            if not content:
-                try:
-                    content = response.output[0].content[0].text
-                except Exception:
-                    content = ""
-            data = json.loads(content) if content else {}
-            full_name = data.get("full_name") or ""
-            return full_name, None
-        else:
-            # Raw HTTP fallback to Responses API
-            try:
-                import requests
-            except Exception:
-                ver = getattr(openai_pkg, "__version__", "unknown")
-                return None, (
-                    f"OpenAI SDK {ver} lacks Responses API and 'requests' is unavailable for HTTP fallback. "
-                    "Add 'requests' to requirements.txt and reinstall."
-                )
-
-            base_url = config.openai_base_url
-            # Create vector store and attach file via HTTP
-            vs_url = f"{base_url.rstrip('/')}/vector_stores"
-            headers_json = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            }
-            try:
-                vs_resp = requests.post(vs_url, headers=headers_json, data=json.dumps({"name": "hiremind_temp_vs"}), timeout=float(os.getenv("REQUEST_TIMEOUT_SECONDS", "60")))
-                if vs_resp.status_code >= 400:
-                    return None, f"HTTP fallback error (vector_store create): {vs_resp.status_code} {vs_resp.text}"
-                vs_id = vs_resp.json().get("id")
-                if not vs_id:
-                    return None, "HTTP fallback error: vector_store id missing"
-                log_kv("OPENAI_VECTOR_STORE", id=vs_id)
-                # Attach file
-                attach_url = f"{base_url.rstrip('/')}/vector_stores/{vs_id}/files"
-                att_resp = requests.post(attach_url, headers=headers_json, data=json.dumps({"file_id": up.id}), timeout=float(os.getenv("REQUEST_TIMEOUT_SECONDS", "60")))
-                if att_resp.status_code >= 400:
-                    return None, f"HTTP fallback error (vector_store attach): {att_resp.status_code} {att_resp.text}"
-            except Exception as e:
-                return None, f"HTTP fallback error (vector_store): {e}"
-
-            url = f"{base_url.rstrip('/')}/responses"
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            }
-            body = {
-                "model": get_openai_model(),
-                "input": [
-                    {"role": "system", "content": [{"type": "input_text", "text": system_text}]},
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "input_text", "text": user_text},
-                            {"type": "input_file", "file_id": up.id}
-                        ],
-                    },
-                ],
-                "tools": [{"type": "file_search", "vector_store_ids": [vs_id]}],
-                "text": {"format": {"type": "json_object"}},
-            }
-            # Log fallback usage
-            try:
-                log_kv("OPENAI_FALLBACK_HTTP", url=url, model=body.get("model"))
-            except Exception:
-                pass
-            try:
-                resp = requests.post(url, headers=headers, data=json.dumps(body), timeout=config.request_timeout_seconds)
-            except Exception as e:
-                return None, f"HTTP fallback error: {e}"
-            if resp.status_code >= 400:
-                return None, f"HTTP fallback error: {resp.status_code} {resp.text}"
-            try:
-                payload = resp.json()
-            except Exception:
-                payload = {}
-
-            # Try to align with SDK's output_text when present
-            content = payload.get("output_text")
-            if not content:
-                # Try traversing 'output' -> list -> content -> text
-                try:
-                    content = payload["output"][0]["content"][0]["text"]
-                except Exception:
-                    content = ""
-            data = json.loads(content) if content else {}
-            full_name = data.get("full_name") or ""
-            # Cleanup vector store
-            try:
-                del_resp = requests.delete(f"{base_url.rstrip('/')}/vector_stores/{vs_id}", headers={"Authorization": f"Bearer {api_key}"}, timeout=config.request_timeout_seconds)
-                # ignore status
-            except Exception:
-                pass
-            return full_name, None
-    except Exception as e:
-        return None, str(e)
+# OpenAI integration has been moved to utils/openai_manager.OpenAIManager
 
 
 # --- Routes -----------------------------------------------------------------
@@ -254,6 +111,19 @@ def api_list_files():
     folder = get_default_folder()
     files = list_docs(folder)
     log_kv("LIST_FILES", folder=folder, count=len(files))
+    return jsonify({"folder": folder, "files": files})
+
+@app.route("/api/roles/default-folder")
+def api_roles_default_folder():
+    folder = get_roles_default_folder()
+    log_kv("ROLES_DEFAULT_FOLDER", folder=folder)
+    return jsonify({"folder": folder})
+
+@app.route("/api/roles/list-files")
+def api_roles_list_files():
+    folder = get_roles_default_folder()
+    files = list_role_docs(folder)
+    log_kv("ROLES_LIST_FILES", folder=folder, count=len(files))
     return jsonify({"folder": folder, "files": files})
 
 
@@ -293,11 +163,141 @@ def api_pick_folder():
         log("FOLDER_PICK_CANCELED")
         return jsonify({"folder": None, "files": []})
 
-    # Update DEFAULT_FOLDER for current process only
-    os.environ["DEFAULT_FOLDER"] = path
+    # Update APPLICANTS_FOLDER for current process only
+    os.environ["APPLICANTS_FOLDER"] = path
     files = list_docs(path)
     log_kv("FOLDER_PICKED", path=path, count=len(files))
     return jsonify({"folder": path, "files": files})
+
+@app.route("/api/roles/pick-folder")
+def api_roles_pick_folder():
+    """Open a Windows folder browser dialog for Roles repository and return selected path."""
+    selected: dict = {"path": None}
+
+    def _pick():
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            path = filedialog.askdirectory(title="Select a roles folder")
+            root.destroy()
+            selected["path"] = path or None
+        except Exception as e:
+            selected["error"] = str(e)
+
+    t = threading.Thread(target=_pick)
+    t.start()
+    t.join()
+
+    if selected.get("error"):
+        log_kv("ROLES_FOLDER_PICK_ERROR", error=selected['error'])
+        return jsonify({"error": selected["error"]}), 500
+
+    path = selected.get("path")
+    if not path:
+        log("ROLES_FOLDER_PICK_CANCELED")
+        return jsonify({"folder": None, "files": []})
+
+    # Update ROLES_FOLDER for current process only
+    os.environ["ROLES_FOLDER"] = path
+    files = list_role_docs(path)
+    log_kv("ROLES_FOLDER_PICKED", path=path, count=len(files))
+    return jsonify({"folder": path, "files": files})
+
+
+@app.route("/api/roles/extract", methods=["POST", "GET"])
+def api_roles_extract():
+    """Persist selected role files to CSV under data/data_roles.csv.
+
+    Body: { "files": ["C:/path/file1.pdf", ...] }
+    Columns: ID (sha256), Timestamp, Filename, RoleTitle (parsed from filename by default)
+    """
+    try:
+        if request.method == "GET":
+            rows = roles_store.get_public_rows()
+            log_kv("ROLES_EXTRACT_GET", rows=len(rows))
+            return jsonify({"rows": rows})
+
+        payload = request.get_json(silent=True) or {}
+        files = payload.get("files") or []
+
+        saved = 0
+        stamp = datetime.now().isoformat()
+        log_kv("ROLES_EXTRACT_POST_START", files=len(files), csv=str(roles_store.csv_path))
+        ROLES_EXTRACT_PROGRESS.update({
+            "active": True,
+            "total": len(files),
+            "done": 0,
+            "start": datetime.now().timestamp(),
+        })
+
+        index_by_id: dict[str, dict] = roles_store.read_index()
+        updated_by_id: dict[str, dict] = dict(index_by_id)
+        errors: list[str] = []
+
+        for fp in files:
+            p = Path(fp)
+            try:
+                if not p.exists() or not p.is_file():
+                    errors.append(f"Not found or not a file: {p}")
+                    log_kv("ROLES_EXTRACT_SKIP_NOTFOUND", path=str(p))
+                    continue
+                rid = sha256_file(p)
+                filename = p.name
+                # Default role title: filename without extension
+                role_title = p.stem
+
+                if rid in updated_by_id:
+                    log_kv("ROLES_EXTRACT_SKIP_ALREADY_DONE", id=rid, file=filename)
+                    continue
+
+                row = {
+                    "ID": rid,
+                    "Timestamp": stamp,
+                    "Filename": filename,
+                    "RoleTitle": role_title,
+                }
+                if rid not in updated_by_id:
+                    saved += 1
+                    log_kv("ROLES_EXTRACT_ROW_NEW", id=rid, file=filename)
+                updated_by_id[rid] = row
+            except Exception as e:
+                errors.append(f"General error [{p.name}]: {e}")
+                log_kv("ROLES_EXTRACT_FILE_ERROR", name=p.name, error=e)
+            finally:
+                try:
+                    ROLES_EXTRACT_PROGRESS["done"] = min(
+                        int(ROLES_EXTRACT_PROGRESS.get("done", 0)) + 1,
+                        int(ROLES_EXTRACT_PROGRESS.get("total", 0))
+                    )
+                except Exception:
+                    pass
+
+        roles_store.write_rows(updated_by_id)
+        ROLES_EXTRACT_PROGRESS.update({"active": False})
+        log_kv("ROLES_EXTRACT_POST_DONE", saved=saved, errors=len(errors), csv=str(roles_store.csv_path), total_rows=len(updated_by_id))
+        return jsonify({"saved": saved, "csv": str(roles_store.csv_path), "errors": errors})
+    except Exception as e:
+        log(f"Roles extract error: {e}")
+        ROLES_EXTRACT_PROGRESS.update({"active": False})
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/roles/extract/progress")
+def api_roles_extract_progress():
+    try:
+        return jsonify({
+            "active": bool(ROLES_EXTRACT_PROGRESS.get("active", False)),
+            "total": int(ROLES_EXTRACT_PROGRESS.get("total", 0)),
+            "done": int(ROLES_EXTRACT_PROGRESS.get("done", 0)),
+            "start": ROLES_EXTRACT_PROGRESS.get("start"),
+        })
+    except Exception as e:
+        log_kv("ROLES_EXTRACT_PROGRESS_ERROR", error=e)
+        return jsonify({"active": False, "total": 0, "done": 0, "start": None})
 
 
 @app.route("/api/hashes", methods=["POST"])
@@ -305,13 +305,18 @@ def api_hashes():
     """Compute content hashes and report duplicates for a list of files.
 
     Body: { "files": ["C:/path/file1.pdf", ...] }
-    Returns: { duplicates: ["path1", ...], duplicate_count: N }
+    Returns: {
+        duplicates: ["path1", ...],                 # later occurrences only (back-compat)
+        duplicates_all: ["path1", ...],             # all members of duplicate groups (including originals)
+        duplicate_count: N                           # count of duplicates_all
+    }
     """
     try:
         payload = request.get_json(silent=True) or {}
         files = payload.get("files") or []
         seen: dict[str, str] = {}
-        dups: list[str] = []
+        dups: list[str] = []  # later duplicates only
+        groups: dict[str, list[str]] = {}
         for fp in files:
             p = Path(fp)
             if not p.exists() or not p.is_file():
@@ -321,8 +326,20 @@ def api_hashes():
                 dups.append(fp)
             else:
                 seen[h] = fp
-        log_kv("HASHES_DONE", files=len(files), duplicates=len(dups))
-        return jsonify({"duplicates": dups, "duplicate_count": len(dups)})
+            groups.setdefault(h, []).append(fp)
+
+        # Build full set of duplicates (include originals) for any hash with >= 2 files
+        dup_all: list[str] = []
+        for paths in groups.values():
+            if len(paths) >= 2:
+                dup_all.extend(paths)
+
+        log_kv("HASHES_DONE", files=len(files), duplicates=len(dup_all))
+        return jsonify({
+            "duplicates": dups,
+            "duplicates_all": dup_all,
+            "duplicate_count": len(dup_all)
+        })
     except Exception as e:
         log_kv("HASHES_ERROR", error=e)
         return jsonify({"error": str(e)}), 500
@@ -336,24 +353,9 @@ def api_extract():
     Writes/updates rows with columns: ID, Timestamp, CV, FullName
     """
     try:
-        data_dir = get_data_path()
-        csv_path = data_dir / "data_applicants.csv"
-
         # Serve rows
         if request.method == "GET":
-            if not csv_path.exists():
-                log_kv("EXTRACT_GET", rows=0)
-                return jsonify({"rows": []})
-            import csv
-            with csv_path.open("r", encoding="utf-8", newline="") as f:
-                reader = csv.DictReader(f)
-                rows = []
-                for r in reader:
-                    rid = r.get("ID") or r.get("id") or r.get("Id") or ""
-                    ts = r.get("Timestamp") or r.get("timestamp") or ""
-                    cv = r.get("CV") or r.get("cv") or r.get("filename") or ""
-                    fn = r.get("FullName") or r.get("full_name") or ""
-                    rows.append({"id": rid, "timestamp": ts, "cv": cv, "full_name": fn})
+            rows = csv_store.get_public_rows()
             log_kv("EXTRACT_GET", rows=len(rows))
             return jsonify({"rows": rows})
 
@@ -361,34 +363,20 @@ def api_extract():
         payload = request.get_json(silent=True) or {}
         files = payload.get("files") or []
 
-        import csv
-
-        is_new = not csv_path.exists()
-        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        is_new = not csv_store.csv_path.exists()
         saved = 0
         stamp = datetime.now().isoformat()
-        log_kv("EXTRACT_POST_START", files=len(files), csv=str(csv_path))
+        log_kv("EXTRACT_POST_START", files=len(files), csv=str(csv_store.csv_path))
+        # Initialize progress
+        EXTRACT_PROGRESS.update({
+            "active": True,
+            "total": len(files),
+            "done": 0,
+            "start": datetime.now().timestamp(),
+        })
 
         # Load existing rows by ID (content hash)
-        existing: list[dict] = []
-        index_by_id: dict[str, dict] = {}
-        header = ["ID", "Timestamp", "CV", "FullName"]
-        if csv_path.exists():
-            try:
-                with csv_path.open("r", encoding="utf-8", newline="") as rf:
-                    reader = csv.DictReader(rf)
-                    if reader.fieldnames:
-                        for r in reader:
-                            rid = r.get("ID") or r.get("id") or r.get("Id") or ""
-                            ts = r.get("Timestamp") or r.get("timestamp") or ""
-                            cv = r.get("CV") or r.get("cv") or r.get("filename") or ""
-                            fn = r.get("FullName") or r.get("full_name") or ""
-                            row = {"ID": rid, "Timestamp": ts, "CV": cv, "FullName": fn}
-                            if rid:
-                                existing.append(row)
-                                index_by_id[rid] = row
-            except Exception as e:
-                log_kv("EXTRACT_READ_EXISTING_ERROR", error=e)
+        index_by_id: dict[str, dict] = csv_store.read_index()
 
         errors: list[str] = []
         max_bytes = get_max_file_mb() * 1024 * 1024
@@ -413,18 +401,67 @@ def api_extract():
                 cv_name = p.name
                 log_kv("EXTRACT_FILE_HASHED", name=cv_name, id=rid)
 
-                full_name_val = ""
+                # Skip re-extraction if this content hash already exists
+                if rid in updated_by_id:
+                    log_kv("EXTRACT_SKIP_ALREADY_DONE", id=rid, cv=cv_name)
+                    continue
+
+                # Default extracted fields (empty)
+                extracted = {}
                 if not openai_failed_once:
-                    fn, err = extract_full_name_with_openai(p)
+                    data, err = openai_mgr.extract_full_name(p)
                     if err:
                         errors.append(f"OpenAI error [{p.name}]: {err}")
                         log_kv("OPENAI_ERROR", name=p.name, error=err)
                         openai_failed_once = True
                     else:
-                        full_name_val = fn or ""
-                        log_kv("OPENAI_OK", name=p.name, full_name_len=len(full_name_val))
+                        extracted = data or {}
+                        log_kv("OPENAI_OK", name=p.name, keys=len(extracted))
 
-                row = {"ID": rid, "Timestamp": stamp, "CV": cv_name, "FullName": full_name_val}
+                # Map extracted public keys -> CSV file columns with defaults
+                def val(k: str) -> str:
+                    v = extracted.get(k, "")
+                    # Normalize lists to comma-separated strings if any
+                    if isinstance(v, list):
+                        return ", ".join(str(x) for x in v)
+                    return str(v)
+
+                row = {
+                    "ID": rid,
+                    "Timestamp": stamp,
+                    "CV": cv_name,
+                    # Personal Information
+                    "PersonalInformation_FirstName": val("first_name"),
+                    "PersonalInformation_LastName": val("last_name"),
+                    "PersonalInformation_FullName": val("full_name"),
+                    "PersonalInformation_Email": val("email"),
+                    "PersonalInformation_Phone": val("phone"),
+                    # Professionalism
+                    "Professionalism_MisspellingCount": val("misspelling_count"),
+                    "Professionalism_MisspelledWords": val("misspelled_words"),
+                    "Professionalism_VisualCleanliness": val("visual_cleanliness"),
+                    "Professionalism_ProfessionalLook": val("professional_look"),
+                    "Professionalism_FormattingConsistency": val("formatting_consistency"),
+                    # Experience
+                    "Experience_YearsSinceGraduation": val("years_since_graduation"),
+                    "Experience_TotalYearsExperience": val("total_years_experience"),
+                    "Experience_EmployerNames": val("employer_names"),
+                    # Stability
+                    "Stability_EmployersCount": val("employers_count"),
+                    "Stability_AvgYearsPerEmployer": val("avg_years_per_employer"),
+                    "Stability_YearsAtCurrentEmployer": val("years_at_current_employer"),
+                    # Socioeconomic
+                    "SocioeconomicStandard_Address": val("address"),
+                    "SocioeconomicStandard_AlmaMater": val("alma_mater"),
+                    "SocioeconomicStandard_HighSchool": val("high_school"),
+                    "SocioeconomicStandard_EducationSystem": val("education_system"),
+                    "SocioeconomicStandard_SecondForeignLanguage": val("second_foreign_language"),
+                    # Flags
+                    "Flags_FlagSTEMDegree": val("flag_stem_degree"),
+                    "Flags_MilitaryServiceStatus": val("military_service_status"),
+                    "Flags_WorkedAtFinancialInstitution": val("worked_at_financial_institution"),
+                    "Flags_WorkedForEgyptianGovernment": val("worked_for_egyptian_government"),
+                }
                 if rid not in updated_by_id:
                     saved += 1
                     log_kv("EXTRACT_ROW_NEW", id=rid, cv=cv_name)
@@ -434,20 +471,44 @@ def api_extract():
             except Exception as e:
                 errors.append(f"General error [{p.name}]: {e}")
                 log_kv("EXTRACT_FILE_ERROR", name=p.name, error=e)
+            finally:
+                # Count this file as processed for progress (even if skipped or errored)
+                try:
+                    EXTRACT_PROGRESS["done"] = min(
+                        int(EXTRACT_PROGRESS.get("done", 0)) + 1,
+                        int(EXTRACT_PROGRESS.get("total", 0))
+                    )
+                except Exception:
+                    pass
 
         # Write back file (header + rows)
-        csv_path.parent.mkdir(parents=True, exist_ok=True)
-        with csv_path.open("w", encoding="utf-8", newline="") as wf:
-            writer = csv.writer(wf)
-            writer.writerow(header)
-            for r in updated_by_id.values():
-                writer.writerow([r["ID"], r["Timestamp"], r["CV"], r.get("FullName", "")])
+        csv_store.write_rows(updated_by_id)
 
-        log_kv("EXTRACT_POST_DONE", saved=saved, errors=len(errors), csv=str(csv_path), total_rows=len(updated_by_id))
-        return jsonify({"saved": saved, "csv": str(csv_path), "errors": errors})
+        EXTRACT_PROGRESS.update({"active": False})
+        log_kv("EXTRACT_POST_DONE", saved=saved, errors=len(errors), csv=str(csv_store.csv_path), total_rows=len(updated_by_id))
+        return jsonify({"saved": saved, "csv": str(csv_store.csv_path), "errors": errors})
     except Exception as e:
         log(f"Extract error: {e}")
+        EXTRACT_PROGRESS.update({"active": False})
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/extract/progress")
+def api_extract_progress():
+    """Return current extraction progress.
+
+    Shape: { active: bool, total: int, done: int, start: float|null }
+    """
+    try:
+        return jsonify({
+            "active": bool(EXTRACT_PROGRESS.get("active", False)),
+            "total": int(EXTRACT_PROGRESS.get("total", 0)),
+            "done": int(EXTRACT_PROGRESS.get("done", 0)),
+            "start": EXTRACT_PROGRESS.get("start"),
+        })
+    except Exception as e:
+        log_kv("EXTRACT_PROGRESS_ERROR", error=e)
+        return jsonify({"active": False, "total": 0, "done": 0, "start": None})
 
 
 if __name__ == "__main__":

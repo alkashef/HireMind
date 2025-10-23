@@ -1,11 +1,13 @@
+html, body { overflow-x: hidden; }
 body { font-family: Arial, sans-serif; margin: 24px; }
+:root { --list-footer-height: 40px; --left-col-width: 24%; --left-cell-width: 180px; }
 .row { display: flex; gap: 8px; align-items: center; }
 .path-box { flex: 1; }
 label { display: block; margin-bottom: 6px; }
 .folder-label { font-weight: 400; color: #444; font-size: 12px; }
 input[readonly] { width: 100%; padding: 8px; }
 button { padding: 8px 12px; cursor: pointer; }
-.list { margin-top: 16px; border: 1px solid #ddd; border-radius: 6px; padding: 8px; max-height: 180px; overflow: auto; }
+.list { margin-top: 16px; border: 1px solid #ddd; border-radius: 6px; padding: 8px; /* height set via flex */ overflow-y: auto; overflow-x: hidden; }
 .item { padding: 6px 4px; border-bottom: 1px solid #f1f1f1; font-size: 14px; }
 .item:last-child { border-bottom: none; }
 .muted { color: #666; }
@@ -13,22 +15,31 @@ button { padding: 8px 12px; cursor: pointer; }
 /* Selectable items */
 .item { cursor: pointer; }
 .item:hover { background: #f7faff; }
-.item.selected { background: #e7f1ff; }
+/* Selection highlight: keep background for duplicate/extracted, add left accent */
+.item.selected { background: #e7f1ff; box-shadow: inset 3px 0 0 #0078d4; }
+.item.duplicate.selected { background: #ffe6f0; box-shadow: inset 3px 0 0 #d83b01; }
+.item.extracted.selected { background: #eaffea; box-shadow: inset 3px 0 0 #107c10; }
 .item.duplicate { background: #ffe6f0; }
+/* Mark items already extracted */
+.item.extracted { background: #eaffea; }
+/* If an item is both duplicate and extracted, duplicate (pink) takes precedence */
+.item.duplicate.extracted, .item.extracted.duplicate { background: #ffe6f0; }
 
 /* Footer under list */
-.list-footer { display: flex; justify-content: flex-start; align-items: flex-start; gap: 8px; margin-top: 6px; }
+.list-footer { display: flex; justify-content: flex-start; align-items: flex-start; gap: 8px; margin-top: 6px; height: var(--list-footer-height); }
 .list-footer .actions { margin-left: auto; }
-.data-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; }
+.data-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; table-layout: fixed; }
 .data-table th, .data-table td { border: 1px solid #eee; padding: 6px 8px; text-align: left; }
 .data-table thead th { background: #f7f7f7; font-weight: 600; }
-.data-table td:first-child { background: #f7f7f7; font-weight: 600; }
+.data-table td:first-child { background: #f7f7f7; font-weight: normal; width: var(--left-cell-width); min-width: var(--left-cell-width); max-width: var(--left-cell-width); }
+.data-table td:nth-child(2) { width: auto; }
+.data-table td:nth-child(2) { word-break: break-word; overflow-wrap: anywhere; background: #fff; font-weight: normal; }
 .data-table thead .filter-row th { background: #fff; }
 .data-table thead .filter-row input { width: 100%; padding: 4px 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; box-sizing: border-box; }
-.data-table tbody tr:nth-child(even) { background: #fafafa; }
+.data-table tbody tr:nth-child(even) { background: #fff; }
 
-/* Constrain table height to half-size and allow scrolling */
-.table-wrap { max-height: 180px; overflow: auto; margin-top: 8px; }
+/* Constrain table height to container and allow scrolling */
+.table-wrap { /* height set via flex or explicit calc */ overflow: auto; margin-top: 16px; }
 .file-count { color: #999; font-size: 12px; }
 
 /* Tabs */
@@ -42,7 +53,25 @@ button { padding: 8px 12px; cursor: pointer; }
 .status-bar { position: fixed; left: 0; right: 0; bottom: 0; width: 100%; resize: none; min-height: 28px; max-height: 60px; font-size: 12px; color: #333; background: #fafafa; border-top: 1px solid #e5e5e5; padding: 6px 8px; box-sizing: border-box; z-index: 100; }
 body { padding-bottom: 48px; }
 
-/* Two-pane layout: left list (50%) and right details (50%) */
-.content-row { display: flex; gap: 16px; align-items: flex-start; margin-top: 8px; }
-.left-pane { flex: 0 0 50%; max-width: 50%; }
-.right-pane { flex: 1 1 0; min-width: 0; }
+/* Three-column layout with two rows: controls (row 1) and content (row 2) */
+.content-row { display: grid; grid-template-columns: var(--left-col-width) minmax(0,1fr) minmax(0,1fr); grid-template-rows: auto 1fr; gap: 16px; align-items: stretch; margin-top: 8px; height: calc(100vh - 220px); overflow-x: hidden; }
+.left-controls { grid-column: 1; grid-row: 1; }
+.left-content { grid-column: 1; grid-row: 2; display: flex; flex-direction: column; min-height: 0; }
+.detail-pane { min-height: 0; overflow-y: auto; overflow-x: hidden; }
+#detailCol1 { grid-column: 2; grid-row: 2; }
+#detailCol2 { grid-column: 3; grid-row: 2; }
+/* Container around detail tables */
+.tables-container { border: 1px solid #ddd; border-radius: 6px; padding: 8px; height: calc(100% - var(--list-footer-height) - 16px); overflow-y: auto; overflow-x: hidden; background: #fff; margin-top: 16px; }
+.table-title { color: #666; font-weight: 600; margin-top: 8px; }
+.table-title:first-child { margin-top: 0; }
+/* Make scrollable areas fill available vertical space */
+.left-content .list { flex: 1 1 auto; }
+.left-content .list-footer { flex: 0 0 auto; }
+
+/* Responsive left cell width to reduce risk of horizontal scrollbars */
+@media (max-width: 1400px) {
+	:root { --left-cell-width: 150px; }
+}
+@media (max-width: 1100px) {
+	:root { --left-cell-width: 120px; }
+}

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Folder Browser</title>
+  <title>HireMind</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
   </head>
   <body>
@@ -13,16 +13,18 @@
     </div>
 
     <div id="paneApplicants" class="tab-pane active" role="tabpanel" aria-labelledby="tabApplicants">
-  <label class="folder-label" for="folderPath">CVs Repository:</label>
-      <div class="row">
-        <div class="path-box">
-          <input id="folderPath" type="text" readonly placeholder="No folder selected" />
-        </div>
-        <button id="browseBtn">Browse…</button>
-        <button id="refreshBtn" title="Refresh list">Refresh</button>
-      </div>
       <div class="content-row">
-        <div class="left-pane">
+        <div class="left-controls">
+          <label class="folder-label" for="folderPath">CVs Repository:</label>
+          <div class="row">
+            <div class="path-box">
+              <input id="folderPath" type="text" readonly placeholder="No folder selected" />
+            </div>
+            <button id="browseBtn">Browse…</button>
+            <button id="refreshBtn" title="Refresh list">Refresh</button>
+          </div>
+        </div>
+        <div class="left-content">
           <div id="list" class="list"></div>
           <div class="list-footer">
             <span id="fileCount" class="file-count"></span>
@@ -32,18 +34,36 @@
             </div>
           </div>
         </div>
-        <div class="right-pane">
-          <div class="table-wrap">
-            <table id="extractTable" class="data-table" aria-label="Selected record details">
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
+        <div id="detailCol1" class="detail-pane" aria-label="Details column 1"><div class="tables-container" id="tablesCol1"></div></div>
+        <div id="detailCol2" class="detail-pane" aria-label="Details column 2"><div class="tables-container" id="tablesCol2"></div></div>
       </div>
     </div>
 
     <div id="paneRoles" class="tab-pane" role="tabpanel" aria-labelledby="tabRoles">
-      <div class="muted">Roles tab (placeholder)</div>
+      <div class="content-row">
+        <div class="left-controls">
+          <label class="folder-label" for="roleFolderPath">Roles Repository:</label>
+          <div class="row">
+            <div class="path-box">
+              <input id="roleFolderPath" type="text" readonly placeholder="No folder selected" />
+            </div>
+            <button id="roleBrowseBtn">Browse…</button>
+            <button id="roleRefreshBtn" title="Refresh list">Refresh</button>
+          </div>
+        </div>
+        <div class="left-content">
+          <div id="roleList" class="list"></div>
+          <div class="list-footer">
+            <span id="roleFileCount" class="file-count"></span>
+            <div class="actions">
+              <button id="roleSelectAllBtn" title="Select all roles">Select All</button>
+              <button id="roleExtractBtn">Extract</button>
+            </div>
+          </div>
+        </div>
+        <div id="roleDetailCol1" class="detail-pane" aria-label="Roles details column 1"><div class="tables-container" id="roleTablesCol1"></div></div>
+        <div id="roleDetailCol2" class="detail-pane" aria-label="Roles details column 2"><div class="tables-container" id="roleTablesCol2"></div></div>
+      </div>
     </div>
 
   <script src="{{ url_for('static', filename='status.js') }}"></script>
@@ -85,9 +105,22 @@
         const countEl = document.getElementById('fileCount');
         const totalNum = Number(total) || 0;
         const selNum = selected.size || 0;
+        const extractedNum = document.querySelectorAll('#list .item.extracted').length || 0;
         const dupText = duplicateCount > 0 ? ` | ${duplicateCount} duplicates found` : '';
-        countEl.textContent = `${totalNum} file${totalNum === 1 ? '' : 's'} | ${selNum} selected${dupText}`;
+        countEl.textContent = `${totalNum} file${totalNum === 1 ? '' : 's'} | ${selNum} selected | ${extractedNum} extracted${dupText}`;
         if (selNum > 0) setStatus(`Selected ${selNum} file${selNum === 1 ? '' : 's'}.`);
+      }
+      function markExtractedInList() {
+        try {
+          const extractedSet = new Set((tableRows || []).map(r => (r.cv || '').toString()));
+          document.querySelectorAll('#list .item').forEach(el => {
+            const p = decodeURIComponent(el.getAttribute('data-path') || '');
+            const name = p.split(/[\\/]/).pop();
+            el.classList.toggle('extracted', extractedSet.has(name));
+          });
+        } catch (_) {
+          // ignore
+        }
       }
 
       let tableRows = [];
@@ -99,20 +132,62 @@
       }
 
       function renderDetailForSelection() {
-        const tbody = document.querySelector('#extractTable tbody');
+        const col1 = document.getElementById('tablesCol1');
+        const col2 = document.getElementById('tablesCol2');
         const cvName = getSingleSelectedBasename();
         // Always render the table structure; populate values if available
         const rec = cvName ? tableRows.find(r => (r.cv || '') === cvName) : null;
         if (!rec && cvName) {
           if (window.setStatus) window.setStatus('Not extracted yet');
         }
-        const pairs = [
-          ['ID', (rec && rec.id) || ''],
-          ['Timestamp', (rec && rec.timestamp) || ''],
-          ['CV', (rec && rec.cv) || (cvName || '')],
-          ['Full Name', (rec && rec.full_name) || ''],
-        ];
-        tbody.innerHTML = pairs.map(([h, v]) => `<tr><td>${h}</td><td>${v}</td></tr>`).join('');
+        const v = (k) => (rec && (rec[k] ?? '')) || '';
+        const makeTable = (title, rows) => {
+          const body = rows.map(([h, vv]) => `<tr><td>${h}</td><td>${vv}</td></tr>`).join('');
+          return `
+            <div class="table-title">${title}</div>
+            <table class="data-table"><tbody>${body}</tbody></table>
+          `;
+        };
+
+        const personal = makeTable('Personal Information', [
+          ['First Name', v('first_name')],
+          ['Last Name', v('last_name')],
+          ['Full Name', v('full_name')],
+          ['Email', v('email')],
+          ['Phone', v('phone')],
+        ]);
+        const professionalism = makeTable('Professionalism', [
+          ['Misspelling count', v('misspelling_count')],
+          ['Misspelled words', v('misspelled_words')],
+          ['Visual cleanliness (0-10)', v('visual_cleanliness')],
+          ['Professional look (0-10)', v('professional_look')],
+          ['Formatting consistency (0-10)', v('formatting_consistency')],
+        ]);
+        const experience = makeTable('Experience', [
+          ['Years since graduation', v('years_since_graduation')],
+          ['Total years of experience', v('total_years_experience')],
+          ['Employer names', v('employer_names')],
+        ]);
+        const stability = makeTable('Stability', [
+          ['Number of employers', v('employers_count')],
+          ['Average years per employer', v('avg_years_per_employer')],
+          ['Years at current/last employer', v('years_at_current_employer')],
+        ]);
+        const socioeconomic = makeTable('Socioeconomic Standard', [
+          ['Address', v('address')],
+          ['Alma mater', v('alma_mater')],
+          ['High school', v('high_school')],
+          ['Education system', v('education_system')],
+          ['Second foreign language', v('second_foreign_language')],
+        ]);
+        const flags = makeTable('Flags', [
+          ['STEM degree?', v('flag_stem_degree')],
+          ['Military service status', v('military_service_status')],
+          ['Worked at financial institution?', v('worked_at_financial_institution')],
+          ['Worked for Egyptian government?', v('worked_for_egyptian_government')],
+        ]);
+        if (col1) col1.innerHTML = personal + experience + stability;
+        if (col2) col2.innerHTML = professionalism + socioeconomic + flags;
       }
 
       async function refreshTable() {
@@ -121,6 +196,8 @@
           const r = await fetch('/api/extract');
           const j = await r.json();
           tableRows = Array.isArray(j.rows) ? j.rows : [];
+          // After loading rows, mark extracted items in the list
+          markExtractedInList();
           renderDetailForSelection();
           if (window.setStatus) window.setStatus('Ready');
         } catch (e) {
@@ -138,8 +215,10 @@
             body: JSON.stringify({ files }),
           });
           const j = await r.json();
-          const dups = new Set((j.duplicates || []).map(String));
-          duplicateCount = Number(j.duplicate_count || 0);
+          // Prefer full duplicate groups if available; fallback to later-only
+          const list = Array.isArray(j.duplicates_all) ? j.duplicates_all : (j.duplicates || []);
+          const dups = new Set(list.map(String));
+          duplicateCount = Number(j.duplicate_count || list.length || 0);
           document.querySelectorAll('#list .item').forEach(el => {
             const p = decodeURIComponent(el.getAttribute('data-path'));
             el.classList.toggle('duplicate', dups.has(p));
@@ -173,7 +252,9 @@
             const name = (f || '').toString().split(/[\\\\/]/).pop();
             return `<div class="item" data-index="${i}" data-path="${encodeURIComponent(f)}">${name}</div>`;
           }).join('');
-        updateFooter(files.length);
+  updateFooter(files.length);
+  // mark extracted files based on current tableRows
+  markExtractedInList();
         // compute duplicate highlighting by content hash
         highlightDuplicates(files);
 
@@ -268,6 +349,41 @@
       });
 
       // Extract button handler -> call backend API (no alerts on success)
+      let extractPollTimer = null;
+      let lastProgressDone = 0;
+      let refreshInFlight = false;
+      async function startExtractPolling() {
+        const startedAt = Date.now();
+        const fmtSec = (ms) => `(${Math.floor(ms/1000)} sec) ...`;
+        lastProgressDone = 0;
+        if (extractPollTimer) clearInterval(extractPollTimer);
+        extractPollTimer = setInterval(async () => {
+          try {
+            const r = await fetch('/api/extract/progress', { cache: 'no-store' });
+            if (!r.ok) return;
+            const j = await r.json();
+            const total = Number(j.total || 0);
+            const done = Number(j.done || 0);
+            const elapsed = fmtSec(Date.now() - startedAt);
+            if (window.setStatus) window.setStatus(`extracted ${done} out of ${total} files ${elapsed}`);
+            if (done > lastProgressDone && !refreshInFlight) {
+              lastProgressDone = done;
+              try {
+                refreshInFlight = true;
+                await refreshTable();
+              } finally {
+                refreshInFlight = false;
+              }
+            }
+            if (!j.active) {
+              clearInterval(extractPollTimer);
+              extractPollTimer = null;
+            }
+          } catch (e) {
+            // ignore transient polling errors
+          }
+        }, 500);
+      }
       document.getElementById('extractBtn').addEventListener('click', async () => {
         const picked = Array.from(selected);
         if (picked.length === 0) {
@@ -277,7 +393,8 @@
         }
         try {
           if (window.setUIBusy) window.setUIBusy(true);
-          if (window.startStatusProgress) window.startStatusProgress(`Extracting ${picked.length} file${picked.length === 1 ? '' : 's'}`);
+          // Poll progress: "extracted n out of m files (X sec) ..."
+          await startExtractPolling();
           const r = await fetch('/api/extract', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -285,26 +402,24 @@
           });
           const j = await r.json();
           if (!r.ok) throw new Error(j.error || 'Extraction failed');
-          // silently refresh table; no message shown
+          // refresh table data and keep current selection to show results
           await refreshTable();
-          // Unselect all items and update footer
           const items = Array.from(document.querySelectorAll('#list .item'));
-          items.forEach(el => el.classList.remove('selected'));
-          selected.clear();
           updateFooter(items.length);
           renderDetailForSelection();
           // Update status bar with any errors summary
           const errs = Array.isArray(j.errors) ? j.errors : [];
           if (errs.length) {
-            if (window.stopStatusProgress) window.stopStatusProgress(`Extraction completed with ${errs.length} error${errs.length === 1 ? '' : 's'}; saved ${j.saved}.`);
+            if (window.setStatus) window.setStatus(`Extraction completed with ${errs.length} error${errs.length === 1 ? '' : 's'}; saved ${j.saved}.`);
           } else {
-            if (window.stopStatusProgress) window.stopStatusProgress(`Extraction completed successfully; saved ${j.saved}.`);
+            if (window.setStatus) window.setStatus(`Extraction completed successfully; saved ${j.saved}.`);
           }
         } catch (e) {
           console.error(e);
           // no user alert on error per requirement
-          if (window.stopStatusProgress) window.stopStatusProgress(`Error: ${e.message || e}`);
+          if (window.setStatus) window.setStatus(`Error: ${e.message || e}`);
         } finally {
+          if (extractPollTimer) { clearInterval(extractPollTimer); extractPollTimer = null; }
           if (window.setUIBusy) window.setUIBusy(false);
         }
       });
@@ -331,7 +446,123 @@
       }
 
       tabApplicants.addEventListener('click', () => activate('applicants'));
-      tabRoles.addEventListener('click', () => activate('roles'));
+      tabRoles.addEventListener('click', async () => { activate('roles'); await loadDefaultRoles(); });
+
+      // Roles helpers
+      const rolesSelected = new Set();
+      let roleLastSelectedIndex = null;
+
+      async function loadDefaultRoles() {
+        try {
+          if (window.setStatus) window.setStatus('Loading roles folder...');
+          const r = await fetch('/api/roles/list-files');
+          const j = await r.json();
+          renderRolesList(j.folder, j.files);
+          if (window.setStatus) window.setStatus('Ready');
+        } catch (e) {
+          console.error(e);
+          if (window.setStatus) window.setStatus(`Error loading roles: ${e.message || e}`);
+        }
+      }
+
+      function renderRolesList(folder, files) {
+        const box = document.getElementById('roleList');
+        document.getElementById('roleFolderPath').value = folder || '';
+        rolesSelected.clear();
+        document.getElementById('roleFileCount').textContent = `${(files||[]).length} role file(s)`;
+        if (!folder) {
+          box.innerHTML = '<div class="muted">No folder selected.</div>';
+          return;
+        }
+        if (!files || files.length === 0) {
+          box.innerHTML = `<div class="muted">No .pdf or .docx files in: ${folder}</div>`;
+          return;
+        }
+        box.innerHTML = files.map((f, i) => {
+          const name = (f || '').toString().split(/[\\/]/).pop();
+          return `<div class="item" data-index="${i}" data-path="${encodeURIComponent(f)}">${name}</div>`;
+        }).join('');
+
+        const items = Array.from(box.querySelectorAll('.item'));
+        const clearAll = () => { items.forEach(n => n.classList.remove('selected')); rolesSelected.clear(); };
+        const toggleOne = (node) => { const p = decodeURIComponent(node.getAttribute('data-path')); if (node.classList.contains('selected')) { node.classList.remove('selected'); rolesSelected.delete(p); } else { node.classList.add('selected'); rolesSelected.add(p); } };
+        const selectOne = (node) => { clearAll(); const p = decodeURIComponent(node.getAttribute('data-path')); node.classList.add('selected'); rolesSelected.add(p); };
+        const selectRange = (a, b) => { clearAll(); const [s,e] = a<=b?[a,b]:[b,a]; for (let i=s;i<=e;i++){ const n=items[i]; const p=decodeURIComponent(n.getAttribute('data-path')); n.classList.add('selected'); rolesSelected.add(p);} };
+        items.forEach(el => {
+          el.addEventListener('click', (ev) => {
+            const idx = Number(el.getAttribute('data-index'));
+            if (ev.shiftKey && roleLastSelectedIndex !== null && !Number.isNaN(idx)) {
+              selectRange(roleLastSelectedIndex, idx);
+            } else if (ev.ctrlKey || ev.metaKey) {
+              toggleOne(el);
+            } else {
+              selectOne(el);
+            }
+            roleLastSelectedIndex = idx;
+            document.getElementById('roleFileCount').textContent = `${items.length} role file(s) | ${rolesSelected.size} selected`;
+          });
+        });
+      }
+
+      document.getElementById('roleBrowseBtn').addEventListener('click', async () => {
+        try {
+          if (window.setStatus) window.setStatus('Opening roles folder picker...');
+          const d = await fetchJSON('/api/roles/pick-folder');
+          renderRolesList(d.folder, d.files);
+          if (window.setStatus) window.setStatus('Ready');
+        } catch (e) {
+          console.error(e);
+          if (window.setStatus) window.setStatus(`Error picking roles folder: ${e.message || e}`);
+        }
+      });
+
+      document.getElementById('roleRefreshBtn').addEventListener('click', () => { if (window.setStatus) window.setStatus('Refreshing roles...'); loadDefaultRoles(); });
+
+      // Roles select all & extract
+      document.getElementById('roleSelectAllBtn').addEventListener('click', () => {
+        const items = Array.from(document.querySelectorAll('#roleList .item'));
+        rolesSelected.clear();
+        items.forEach(el => { const p = decodeURIComponent(el.getAttribute('data-path')); el.classList.add('selected'); rolesSelected.add(p); });
+        document.getElementById('roleFileCount').textContent = `${items.length} role file(s) | ${rolesSelected.size} selected`;
+      });
+
+      let rolesExtractPollTimer = null;
+      async function startRolesExtractPolling() {
+        const startedAt = Date.now();
+        const fmtSec = (ms) => `(${Math.floor(ms/1000)} sec) ...`;
+        if (rolesExtractPollTimer) clearInterval(rolesExtractPollTimer);
+        rolesExtractPollTimer = setInterval(async () => {
+          try {
+            const r = await fetch('/api/roles/extract/progress', { cache: 'no-store' });
+            if (!r.ok) return;
+            const j = await r.json();
+            const total = Number(j.total || 0);
+            const done = Number(j.done || 0);
+            const elapsed = fmtSec(Date.now() - startedAt);
+            if (window.setStatus) window.setStatus(`roles: extracted ${done} out of ${total} files ${elapsed}`);
+            if (!j.active) { clearInterval(rolesExtractPollTimer); rolesExtractPollTimer = null; }
+          } catch (_) { /* ignore */ }
+        }, 500);
+      }
+
+      document.getElementById('roleExtractBtn').addEventListener('click', async () => {
+        const picked = Array.from(rolesSelected);
+        if (picked.length === 0) { alert('Select one or more role files to extract.'); return; }
+        try {
+          if (window.setUIBusy) window.setUIBusy(true);
+          await startRolesExtractPolling();
+          const r = await fetch('/api/roles/extract', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: picked }) });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || 'Roles extraction failed');
+          if (window.setStatus) window.setStatus(`Roles extraction completed; saved ${j.saved}.`);
+        } catch (e) {
+          console.error(e);
+          if (window.setStatus) window.setStatus(`Error: ${e.message || e}`);
+        } finally {
+          if (rolesExtractPollTimer) { clearInterval(rolesExtractPollTimer); rolesExtractPollTimer = null; }
+          if (window.setUIBusy) window.setUIBusy(false);
+        }
+      });
     </script>
     <textarea id="statusBar" class="status-bar" rows="1" readonly placeholder="Status..."></textarea>
   </body>

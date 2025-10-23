@@ -10,20 +10,29 @@ HireMind orchestrates a CV extraction workflow that feeds candidate documents th
 
 - Batch CV ingestion with structured CSV export to `data/data_applicants.csv`
 - Rich server-side logging for key events (listing, picks, hashing, extraction, OpenAI calls)
-- Streamlit UI for configuring folders, triggering runs, and downloading results
-- Flask utility endpoints for browsing local folders inside the desktop helper app
+- Flask single-page UI for browsing folders, selecting CVs, triggering extraction, and viewing results
+- UI now uses a 3-column layout: left-most column for the CV file list (with Select All and Extract), and two columns for details split into 6 titled sections (Personal Information, Experience, Stability, Professionalism, Socioeconomic Standard, Flags). Section titles are grey text above each table; tables share a consistent left-column width.
+ - Roles tab mirrors the Applicants left-side layout: Roles Repository picker (path text box + Browse + Refresh) and a list of .pdf/.docx role files.
+ - The folder path + Browse/Refresh control sits in the left column and matches the file list width; selected files are visually highlighted with a left accent line.
+- Duplicate detection by content hash; clear status bar with live progress and elapsed time
+    - Duplicate highlighting marks all files in each duplicate group (both the original and its copies)
+- OpenAI Responses API via latest SDK with automatic HTTP fallback; `text.format` set to `json_object`
+ - Expanded extraction fields saved to CSV and shown in UI: Personal Information, Professionalism, Experience, Stability, Socioeconomic Standard, and Flags (see schema below)
+ - Skips re-extraction for files already processed (by content hash)
 
 ## Technology Stack
 
 ## Important Files:
-- `app.py` – Flask helper for the desktop folder browser UI
-- `ui/streamlit_app.py` – Streamlit front-end for running extractions
-- `services/cv_processor.py` – batch processor that writes CSV output to `data/`
+- `app.py` – Flask app exposing the UI and API endpoints
+- `templates/index.html` – single-page UI (file list + details table + status bar)
+- `static/styles.css` – styles, including the fixed first column for the details table
+- `static/status.js` – shared in-app status and progress helpers used by the UI
+- `utils/csv_store.py` – CSVStore encapsulating read/write of `data/data_applicants.csv`
+- `utils/openai_manager.py` – encapsulates OpenAI SDK + HTTP fallback (vector stores, file_search, text.format)
 - `prompts/` – prompt templates used by the OpenAI extraction flow (e.g., `cv_full_name_system.md`, `cv_full_name_user.md`)
 - `config/.env` – runtime configuration (mirrored by `config/.env-example`)
 - `config/settings.py` – central AppConfig loader for environment and paths
 - `utils/logger.py` – AppLogger writing to `LOG_FILE_PATH` with [TIMESTAMP] and kv helper
-- `static/status.js` – shared in-app status and progress helpers used by the UI
 
 ## Setup for Development
 
@@ -113,12 +122,33 @@ Set the base data folder in `config/.env`:
 
 DATA_PATH=data
 
-The Extract action writes rows to `DATA_PATH/data_applicants.csv` with columns: `ID,Timestamp,CV,FullName`.
+# Roles repository
+# If not set, defaults to DEFAULT_FOLDER
+ROLES_FOLDER=C:\Users\<YourUser>\Documents\Roles
+
+The Extract action writes rows to `DATA_PATH/data_applicants.csv` with columns: `ID, Timestamp, CV` and category-prefixed fields such as:
+- PersonalInformation_FirstName, PersonalInformation_LastName, PersonalInformation_FullName
+- Professionalism_MisspellingCount, ...
+- Experience_YearsSinceGraduation, Experience_TotalYearsExperience, Experience_EmployerNames
+- Stability_EmployersCount, Stability_AvgYearsPerEmployer, Stability_YearsAtCurrentEmployer
+- SocioeconomicStandard_Address, ...
+- Flags_MilitaryServiceStatus, Flags_WorkedAtFinancialInstitution, Flags_WorkedForEgyptianGovernment
 IDs are SHA-256 content hashes of files; identical-content files share the same ID (last write wins for CV name).
+ During extraction, files whose content hash already exists are skipped—no additional API calls are made.
+ 
+Extraction schema (flat JSON, CSV columns mirror these where applicable):
+ - Personal Information: full_name, first_name, last_name, email, phone
+ - Professionalism: misspelling_count, misspelled_words, visual_cleanliness, professional_look, formatting_consistency
+ - Experience: years_since_graduation, total_years_experience
+ - Stability: employers_count, employer_names, avg_years_per_employer, years_at_current_employer
+ - Socioeconomic Standard: address, alma_mater, high_school, education_system, second_foreign_language
+ - Flags: flag_stem_degree, military_service_status, worked_at_financial_institution, worked_for_egyptian_government
 
 OpenAI SDK version
 
 - This project now targets the latest OpenAI Python SDK (see requirements.txt). The Responses API uses `text.format`; we set `text.format` to `json_object` to return structured JSON. If you previously installed a different version globally, reinstall with `python -m pip install -r requirements.txt`.
+
+Older CSVs (from before prefixing) are read with backward-compatible field mapping so existing extractions continue to show in the UI. Employer names are now mapped under Experience (fallback reads Stability_EmployerNames).
 
 ### How to Test
 
@@ -159,7 +189,7 @@ This starts the web server on http://localhost:5000. On launch, the log will inc
     Execute queries and view results
 
 Additionally, the current UI includes:
-    Applicants tab: use "CVs Repository:" and the Browse button to choose a local folder. The top bar includes a Refresh button to reload the list. The UI is split: left pane (50% width) shows the file list with filenames only (no full paths) and a footer with Select All and Extract buttons; single-click selects one file, while Ctrl/⌘-click toggles multiple and Shift-click selects a range. The list shows `N files | M selected | X duplicates found` and highlights duplicates (by content hash) in pink. The right pane renders a read-only, transposed two-column detail table (Header | Value) that is always visible: when a file is selected, it shows that record; when nothing is selected or not yet extracted, it remains visible with empty values. After extraction, the selection is cleared. A status bar at the bottom is now more verbose: it shows loading states (e.g., computing duplicates, loading results), live extraction progress with elapsed time, and completion summaries (saved count and error count).
+    Applicants tab: use "CVs Repository:" and the Browse button to choose a local folder. The top bar includes a Refresh button to reload the list. The UI is split: left pane (50% width) shows the file list with filenames only (no full paths) and a footer with Select All and Extract buttons; single-click selects one file, while Ctrl/⌘-click toggles multiple and Shift-click selects a range. The list shows `N files | M selected | X duplicates found` and highlights duplicates (by content hash) in pink. The right pane renders a read-only, transposed two-column detail table (Header | Value) that is always visible: when a file is selected, it shows that record; when nothing is selected or not yet extracted, it remains visible with empty values. Selection is preserved after extraction. The first column width is fixed for readability. A status bar at the bottom is verbose: it shows loading states (e.g., computing duplicates, loading results), live extraction progress with elapsed time, and completion summaries (saved count and error count).
     Roles tab: placeholder for future functionality.
 
 ## Batch Mode
