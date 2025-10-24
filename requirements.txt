@@ -4,4 +4,17 @@ loguru>=0.7.0
 openai>=1.63.0
 python-dotenv>=1.0.0
 requests>=2.31.0
-# chromadb removed: use Weaviate or other vector DB instead
+PyMuPDF>=1.22.0     # used for PDF text extraction (fitz)
+python-docx>=0.8.11 # used for DOCX text extraction
+
+# Model download / sentence embeddings
+sentence-transformers>=2.2.2
+huggingface-hub>=0.15.1
+transformers>=4.34.0
+
+
+# Vector DB client (Weaviate planned integration)
+weaviate-client>=3.23.0
+
+# Optional: cross-platform file locking for concurrent writes
+portalocker>=2.7.0

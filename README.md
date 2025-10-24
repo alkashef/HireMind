@@ -10,6 +10,8 @@ HireMind orchestrates a CV extraction workflow that feeds candidate documents th
 - UI now uses a 3-column layout: left-most column for the CV file list (with Select All and Extract), and two columns for details split into 6 titled sections (Personal Information, Experience, Stability, Professionalism, Socioeconomic Standard, Flags). Section titles are grey text above each table; tables share a consistent left-column width.
  - Roles tab mirrors the Applicants left-side layout: Roles Repository picker (path text box + Browse + Refresh) and a list of .pdf/.docx role files.
  - The folder path + Browse/Refresh control sits in the left column and matches the file list width; selected files are visually highlighted with a left accent line.
+  
+Note: the extraction pipeline is intentionally generic — it applies to both CVs (applicants) and role/job-description files. The same file-reading, OpenAI extraction, sectioning, embedding and upsert pipeline will be reused for both file types. The only differences are the downstream CSV columns/attributes and the Weaviate class properties which are mapped per-type (applicants vs roles).
 - Duplicate detection by content hash; clear status bar with live progress and elapsed time
     - Duplicate highlighting marks all files in each duplicate group (both the original and its copies)
 - OpenAI Responses API via latest SDK with automatic HTTP fallback; `text.format` set to `json_object`
@@ -31,6 +33,24 @@ HireMind orchestrates a CV extraction workflow that feeds candidate documents th
 - `config/.env` – runtime configuration (mirrored by `config/.env-example`)
 - `config/settings.py` – central AppConfig loader for environment and paths
 - `utils/logger.py` – AppLogger writing to `LOG_FILE_PATH` with [TIMESTAMP] and kv helper
+
+## Quick file reference
+Brief one-line summary of core files and their primary purpose.
+
+- `app.py` — Flask server: endpoints for listing files, extracting CVs/roles, progress, and simple admin routes.
+- `templates/index.html` — Single-page UI that drives file selection, extraction actions, and displays result tables.
+- `static/main.js` / `static/roles.js` — Frontend behaviour for Applicants and Roles views (selection, extract, fetch details).
+- `static/status.js` — Shared status/progress helpers used by the UI.
+- `static/styles.css` — UI styles and layout.
+- `utils/csv_manager.py` — CSV-backed stores: `CSVStore` for applicants and `RolesStore` for roles; read/write and public row normalization.
+- `utils/openai_manager.py` — Encapsulates OpenAI Responses API usage and file-based extraction prompts.
+- `utils/logger.py` — Simple file logger used across services; writes timestamped KV logs to configured log file.
+- `config/settings.py` & `config/.env-example` — Centralized configuration: paths, API keys, and runtime knobs.
+- `scripts/download_paraphrase.py` — Downloader for the paraphrase embedding model (paraphrase-MiniLM-L12-v2) used for local embeddings.
+- `scripts/download_nous-hermes.py` — Downloader for the Hermes Pro GGUF model (defaults to `models/hermes-pro/`).
+- `requirements.txt` — Python dependencies for the project (OpenAI SDK, PyMuPDF, sentence-transformers, weaviate-client, etc.).
+- `data/applicants.csv` & `data/roles.csv` — Canonical CSV outputs produced by the extract flow (IDs are SHA256 content hashes).
+- `utils/weaviate_store.py` (planned) — Weaviate client wrapper and schema helpers to store CVDocument/Role and section embeddings (design and plan in README).
 
 ## Setup for Development
 
@@ -196,3 +216,133 @@ Additionally, the current UI includes:
 python app.py --batch
 
 This processes a batch of questions from the file specified in QUESTIONS_PATH in the .env file and outputs results to an Excel file.
+
+## Weaviate integration — parallel implementation (planning only)
+
+### Purpose
+
+This section documents a clear, step-by-step plan for adding Weaviate as a parallel vector & document store. IMPORTANT: we will not perform a migration or retire the CSV pipeline here — both systems will run in parallel during development and validation. The goal is to make Weaviate a fully-featured, optional back-end service that mirrors the CSV content (metadata + CV text + section embeddings) and provides vector search and filtered retrieval.
+
+### High-level goals
+
+- Store structured OpenAI-extracted attributes (booleans/ints/strings) on a CVDocument record.
+- Store full CV text and break it into semantic sections; each section will have its own embedding and metadata.
+- Store roles as Role objects with role_text, attributes, and embeddings.
+- Keep CSV export/writes unchanged and authoritative during development; Weaviate writes are concurrent and idempotent.
+
+Note on generic handling: the pipeline is shared for both CVs and Roles — the implementation will treat each input file the same through extraction, sectioning and embedding. A lightweight mapping layer will translate the extracted attributes into the correct CSV columns (`data/applicants.csv` vs `data/roles.csv`) and into the corresponding Weaviate class properties (`CVDocument` vs `Role`).
+
+### Design constraints
+
+- No CSV retirement steps in this document. All work is explicitly for parallel integration.
+- Small, testable commits are preferred. Each step below is scoped to a minimal change that can be validated independently.
+- Keep Weaviate classes vectorizer="none" and supply vectors on create so we control embedding provider and model version.
+
+### Related files → classes → key functions (brief)
+
+- `utils/weaviate_store.py` (planned)
+  - class `WeaviateStore`: `ensure_schema()`, `upsert_cv_document()`, `upsert_cv_section()`, `get_cv_by_sha()`, `process_file_and_upsert()`
+- `utils/openai_manager.py`
+  - class `OpenAIManager`: `extract_full_name_from_file(file_path)`; (planned) `get_embedding(text)` adapter
+- `utils/csv_manager.py`
+  - classes `CSVStore`, `RolesStore`: `read_index()`, `write_rows()`, `get_public_rows()`
+- `config/settings.py`
+  - `AppConfig` properties: `weaviate_url`, `weaviate_api_key`, `weaviate_batch_size`
+- `app.py`
+  - endpoints: `/api/extract` (existing), (planned) `/api/weaviate/cv/<sha>` and `/api/weaviate/role/<sha>`
+- `scripts/weaviate_migrate.py` (planned)
+  - `batch_upsert_from_csv()` (batch migration helper)
+
+### Explicit method map (design-only, no implementation here)
+
+The pipeline will call small, focused methods (names below). Embeddings are generated locally from the paraphrase model under `models/` and supplied to Weaviate. These are design placeholders and will be implemented as small functions in `utils/` (for example `utils/extractors.py`, `utils/embeddings.py`, and `utils/weaviate_store.py`). Use PascalCase for classes and snake_case for functions.
+
+- pdf_to_text(path: Path) -> str
+  - Purpose: extract raw text from a PDF using PyMuPDF (preserve line breaks/spacing).
+  - Suggested location: `utils/extractors.py` (or inside `utils/weaviate_store.py` for a minimal design).
+
+- docx_to_text(path: Path) -> str
+  - Purpose: extract raw text from a DOCX using python-docx (preserve paragraphs).
+  - Suggested location: `utils/extractors.py`.
+
+- text_to_embedding(text: str) -> List[float]
+  - Purpose: run the local paraphrase model (from `models/`) to produce an embedding vector for a piece of text.
+  - Suggested location: `utils/embeddings.py` or as `WeaviateStore.embed_texts()`.
+
+- write_cv_to_db(sha: str, filename: str, full_text: str, attributes: dict)
+  - Purpose: write or upsert a `CVDocument` record to Weaviate: store metadata, `full_text`, and create `CVSection` objects with vectors.
+  - Suggested location: `utils/weaviate_store.py` (wraps `upsert_cv_document()` + `upsert_cv_section()`).
+
+- read_cv_from_db(sha: str) -> dict
+  - Purpose: read all CV attributes and sections from Weaviate for UI display.
+  - Suggested location: `utils/weaviate_store.py` (`get_cv_by_sha()`).
+
+- write_role_to_db(sha: str, filename: str, full_text: str, attributes: dict)
+  - Purpose: same as `write_cv_to_db` but writes a `Role` object (job description) and its sections/embeddings.
+  - Suggested location: `utils/weaviate_store.py` (`upsert_role()` / reuse `upsert_cv_section()` flow).
+
+- read_role_from_db(sha: str) -> dict
+  - Purpose: read a `Role` record and its sections from Weaviate for UI display.
+  - Suggested location: `utils/weaviate_store.py` (`get_role_by_id()` / similar to `get_cv_by_sha`).
+
+### UI note
+
+- Add a new right-most column in both Applicants and Roles tabs that displays Weaviate data for the selected file. The frontend should call `GET /api/weaviate/cv/<sha>` or `GET /api/weaviate/role/<sha>` and render a compact table: metadata, full_text snippet, and a list of sections (type + snippet + option to view full section).
+
+### Detailed step-by-step plan (each step is intentionally small)
+
+1) do: add runtime config and examples (small)
+    - brief: expose Weaviate connection values in the config so other modules can read them.
+    - change(s):
+      - update `config/.env-example` to include placeholders: WEAVIATE_URL, WEAVIATE_API_KEY, WEAVIATE_BATCH_SIZE
+      - ensure `config/settings.py` exposes `weaviate_url`, `weaviate_api_key`, and `weaviate_batch_size` properties
+    - why: keeps configuration explicit and safe; no runtime behavior changes.
+
+2) do: write a minimal client wrapper and schema initializer (small)
+    - brief: create `utils/weaviate_store.py` with client initialization and `ensure_schema()` that creates three classes: `CVDocument`, `CVSection`, and `Role` (all vectorizer="none").
+    - change(s):
+      - file `utils/weaviate_store.py`: add `WeaviateStore` class with `__init__()` and `ensure_schema()` only.
+    - acceptance: a dev can run a small Python snippet that imports the module and calls `WeaviateStore(...).ensure_schema()` and confirm classes exist.
+
+3) do: add CV upsert and get-by-sha helpers (small)
+    - brief: implement `upsert_cv(sha256, filename, full_text, metadata)` and `get_cv_by_sha(sha256)` to create or update CVDocument objects (no section handling yet).
+    - change(s):
+      - update `utils/weaviate_store.py`: add `upsert_cv()` and `get_cv_by_sha()` methods.
+    - acceptance: can create a CVDocument for a sample file and retrieve it by sha256.
+
+4) do: add section splitting + embedding helper (small)
+    - brief: add a deterministic, simple text-splitting helper and an adapter that can call a chosen embedding provider (local paraphrase model or remote provider).
+    - change(s):
+      - update `utils/weaviate_store.py`: add `_split_into_sections(text)` and `embed_texts(texts)` helpers. Keep both testable independently.
+    - acceptance: given a sample CV text, `_split_into_sections()` returns multiple sections; `embed_texts()` returns vectors for each section.
+
+5) do: upsert sections with vectors (small)
+    - brief: implement `upsert_section(parent_sha, section_type, section_text, embedding, filename, metadata)` and a convenience `process_file_and_upsert()` that runs CV upsert + section upserts.
+    - change(s):
+      - update `utils/weaviate_store.py`: add `upsert_section()` and `process_file_and_upsert()`.
+    - acceptance: call `process_file_and_upsert()` on one file and verify CVDocument + multiple CVSection objects exist in Weaviate; each CVSection must have a vector.
+
+6) do: add a read API for the UI (small)
+    - brief: expose a backend route that returns `get_cv_by_sha(sha)` JSON (CV metadata + sections) so the frontend can render a details table.
+    - change(s):
+      - add a safe, non-intrusive endpoint in `app.py` like `GET /api/weaviate/cv/<sha>` that returns the Weaviate record or an error if Weaviate is not configured.
+    - acceptance: UI can fetch and render CV/sections for a sha without modifying the CSV behavior.
+
+7) do: validation checklist & smoke tests (small)
+    - brief: create a short checklist and smoke scripts (not a migration) to verify idempotency, basic retrieval, and vector presence.
+    - change(s):
+      - small script or notebook (optional) that calls `upsert_cv`, `process_file_and_upsert`, and `get_cv_by_sha` for 1–3 representative CVs and asserts expected shapes.
+    - acceptance: automatic checks confirm CV and sections persisted and retrievable.
+
+### Operational notes (parallel-first approach)
+
+- Writes to Weaviate must be idempotent by `sha256`. Implement `upsert_cv` to search by sha and update existing objects instead of creating duplicates.
+- Keep the CSV write path completely unchanged and authoritative until you explicitly flip an operator-controlled toggle.
+- Weaviate schema uses `vectorizer: "none"` so embedding model version and provider remain under our control.
+- When embedding offline, keep a small `models/` folder and a lightweight downloader (existing `scripts/download_paraphrase.py`) to pin the embedding model used for local reproducibility.
+
+### Acceptance criteria (planning)
+
+- All planned steps are documented here in README and each step is small and independently testable.
+- Weaviate integration is designed to run concurrently with the CSV pipeline; no migration/retirement actions are included.
+- Each incremental step has a clear, minimal acceptance test (create/ensure schema, upsert CV, upsert section, retrieve CV) to reduce blast radius.
