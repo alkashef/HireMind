@@ -6,7 +6,6 @@
 - ALWAYS update `requirements.txt` and `README.md` after each code edit.
 - Keep all configurations in `config/.env`.
 - Maintain `config/.env-example` with the same structure as `config/.env`, but use placeholders for secrets.
-- Ignore the `archive` folder.
 - Use standard libraries or popular ones (e.g., pandas, requests, langchain, openai).
 - Match library usage to the versions specified in `requirements.txt`.
 
@@ -22,6 +21,7 @@
 - Always encapsulate new functionality in methods.
 - Avoid redundancy and keep the code concise.
 - Do **NOT** implement tests.
+- Do **NOT** implement fallbacks.
 - Use a logger to log all details to the file specified in `LOG_FILE_PATH` from the `.env` file. Precede each log entry with a `[TIMESTAMP]` using the local computer clock.
 
 ## Development Approach
@@ -39,9 +39,8 @@
 - Never hardcode or echo secret keys; rely on `config/.env`.
 - When adding debug output, keep it optional, lightweight, and safe; prefer using the existing logger.
 - Proceed with deletes and renames as instructed, without confirmation.
-- Do NOT implement fallbacks.
- - Keep the existing README structure; only add/change details within current sections. Ask before removing or adding sections.
- - Use the README to document outputs and usage only; do not use it to change project inputs or behavior.
+- Keep the existing README structure; only add/change details within current sections. Ask before removing or adding sections.
+- Use the README to document outputs and usage only; do not use it to change project inputs or behavior.
 
 ## Communication
 - Avoid repetition of instructions or disclaimers.

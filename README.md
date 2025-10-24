@@ -1,8 +1,4 @@
-# APP NAME
-
-SHORT DESCRIPTION
-
-## Overview
+# Hire Mind
 
 HireMind orchestrates a CV extraction workflow that feeds candidate documents through the OpenAI API and consolidates normalized fields into CSV files stored under `data/`.
 
@@ -34,7 +30,7 @@ ChromaDB is used to store and search vector embeddings for applicants and roles.
 - `templates/index.html` – single-page UI (file list + details table + status bar)
 - `static/styles.css` – styles, including the fixed first column for the details table
 - `static/status.js` – shared in-app status and progress helpers used by the UI
-- `utils/csv_store.py` – CSVStore encapsulating read/write of `data/applicants.csv`
+ - `utils/csv_manager.py` – CSVStore and RolesStore encapsulating read/write of `data/applicants.csv` and `data/roles.csv`
 - `utils/openai_manager.py` – encapsulates OpenAI SDK + HTTP fallback (vector stores, file_search, text.format)
 - `prompts/` – prompt templates used by the OpenAI extraction flow (e.g., `cv_full_name_system.md`, `cv_full_name_user.md`)
 - `config/.env` – runtime configuration (mirrored by `config/.env-example`)

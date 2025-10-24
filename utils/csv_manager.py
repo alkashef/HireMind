@@ -1,11 +1,25 @@
-from __future__ import annotations
+"""CSV manager utilities.
 
+This module centralizes CSV-backed store functionality for applicants and roles.
+It intentionally provides two public classes:
+- CSVStore: manages the applicants CSV (data/applicants.csv)
+- RolesStore: lightweight subclass configured for roles CSV (data/roles.csv)
+
+Other modules in the codebase currently import `CSVStore` from
+`utils.csv_store` and `RolesStore` from `utils.roles_store`. The goal of the
+refactor is to consolidate the implementations here; callers will be updated
+later to import from `utils.csv_manager`.
+"""
+
+from __future__ import annotations
 import csv
 from pathlib import Path
 from typing import Dict, List
-
 from config.settings import AppConfig
 from utils.logger import AppLogger
+
+
+__all__ = ["CSVStore", "RolesStore", "create_applicants_store", "create_roles_store"]
 
 
 class CSVStore:
@@ -82,6 +96,7 @@ class CSVStore:
                     rid = r.get("ID") or r.get("id") or r.get("Id") or ""
                     ts = r.get("Timestamp") or r.get("timestamp") or ""
                     cv = r.get("CV") or r.get("cv") or r.get("filename") or ""
+
                     # Helper for backward-compatible field resolution
                     def g(*keys: str) -> str:
                         for k in keys:
@@ -89,6 +104,7 @@ class CSVStore:
                             if v not in (None, ""):
                                 return str(v)
                         return ""
+
                     # Map file columns to UI/public keys
                     rows.append({
                         # meta
@@ -206,3 +222,13 @@ class RolesStore(CSVStore):
         except Exception as e:
             self.logger.log_kv("ROLES_CSV_GET_ROWS_ERROR", error=e)
         return rows
+
+
+def create_applicants_store(config: AppConfig, logger: AppLogger) -> CSVStore:
+    """Factory helper to create an applicants CSVStore."""
+    return CSVStore(config, logger)
+
+
+def create_roles_store(config: AppConfig, logger: AppLogger) -> RolesStore:
+    """Factory helper to create a RolesStore."""
+    return RolesStore(config, logger)
