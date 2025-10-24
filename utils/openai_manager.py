@@ -23,10 +23,8 @@ class OpenAIManager:
         #   - Keep a persistent store id (e.g., self._vs_id) created on first use
         #   - Attach each uploaded file to that store
         #   - Delete the store only on app shutdown/teardown (or rotate after N files)
-        # Consideration: Retrieval contamination across files; mitigate with strict
-        # prompts and passing the current CV via input_file, or rotate per batch.
-        # Alternative: Use a local vector DB like ChromaDB for session/batch storage
-        # to avoid network overhead and rate limits.
+    # Consideration: Retrieval contamination across files; mitigate with strict
+    # prompts and passing the current CV via input_file, or rotate per batch.
         self._vs_id: str | None = None  # SDK-managed vector store id (future reuse)
         self._vs_id_http: str | None = None  # HTTP fallback vector store id (future reuse)
 
