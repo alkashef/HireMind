@@ -5,7 +5,21 @@ primary documentation; this file is for TODOs only.
 
 ## Current actionable todos
 
-1) Add runtime config keys (safe, non-breaking)
+1. Make the generate_from_prompt method a separate utility under the utils folder. It should be generic.  To be used everywhre in the #codebase and should depend on the env file and settings.py to get the right prompt files.
+
+1. revise the env file and edit it directly if necessary to make sure the hermes model params are exposed
+
+1. create a paraphrase clinet similar to the hermes client
+
+1. update the paraphrase test to followthe same approcah as the hermes test wit hthe same assumptions
+
+1. check that the paraphrase download script downloads the hf version
+
+1. remove all files under the logs folder when cleaning the #codebase using the scripts/clear_cache.py script.
+
+1. there are 2 test_hermes files, what's the difference between them?
+
+1. Add runtime config keys (safe, non-breaking)
    - Files to edit/create:
      - `config/.env-example` (edit)
      - `config/settings.py` (ensure properties exposed)
@@ -18,7 +32,7 @@ primary documentation; this file is for TODOs only.
    - Acceptance (one-line checks):
      - `config/settings.py` imports and exposes the three properties and `config/.env-example` contains the three placeholder keys.
 
-2) Create minimal `utils/weaviate_store.py` skeleton with `ensure_schema()` (idempotent)
+1. Create minimal `utils/weaviate_store.py` skeleton with `ensure_schema()` (idempotent)
    - Files to edit/create:
      - `utils/weaviate_store.py` (create)
    - Methods/classes to implement:
@@ -31,7 +45,7 @@ primary documentation; this file is for TODOs only.
    - Acceptance:
      - Importing `WeaviateStore` and calling `WeaviateStore(...).ensure_schema()` does not raise if `weaviate_url` is not configured, and when configured, required classes exist in Weaviate.
 
-3) Add CV write/read minimal helpers (metadata-only, no sections yet)
+1. Add CV write/read minimal helpers (metadata-only, no sections yet)
    - Files to edit/create:
      - `utils/weaviate_store.py` (extend)
    - Methods to add:
@@ -44,7 +58,7 @@ primary documentation; this file is for TODOs only.
    - Acceptance:
      - After calling `write_cv_to_db(...)`, `read_cv_from_db(sha)` returns the same metadata and `full_text`.
 
-4) Add extractor utilities (PDF/DOCX) and SHA helper (local, deterministic)
+1. Add extractor utilities (PDF/DOCX) and SHA helper (local, deterministic)
    - Files to edit/create:
      - `utils/extractors.py` (create)
      - small helper in `utils/__init__.py` or `utils/extractors.py` for `compute_sha256_bytes(data: bytes) -> str`
@@ -59,7 +73,7 @@ primary documentation; this file is for TODOs only.
    - Acceptance:
      - Given a sample PDF and DOCX in tests (or local files), `pdf_to_text()`/`docx_to_text()` return non-empty strings and `compute_sha256_bytes()` returns a stable 64-char hex string.
 
-5) Add embedding adapter (local paraphrase model) and text splitter helper
+1. Add embedding adapter (local paraphrase model) and text splitter helper
    - Files to edit/create:
      - `utils/embeddings.py` (create)
      - small splitter helper: `_split_into_sections(text: str) -> List[dict]` (can live in `utils/weaviate_store.py` or `utils/extractors.py` but prefer `utils/weaviate_store.py` for close coupling)
@@ -73,7 +87,7 @@ primary documentation; this file is for TODOs only.
    - Acceptance:
      - `text_to_embedding('hello world')` returns a numeric vector (list of floats) of consistent length; `_split_into_sections()` returns at least one section for non-empty text.
 
-6) Upsert CV sections with vectors and process-file flow
+1. Upsert CV sections with vectors and process-file flow
    - Files to edit/create:
      - `utils/weaviate_store.py` (extend)
    - Methods to implement:
@@ -87,7 +101,7 @@ primary documentation; this file is for TODOs only.
    - Acceptance:
      - `process_file_and_upsert()` returns a dict summarizing `sha`, `num_sections`, and `weaviate_ok: bool`. When Weaviate is configured, `CVSection` objects exist with non-empty vectors.
 
-7) Add role write/read helpers (mirror CV helpers) and small API endpoints (safe)
+1. Add role write/read helpers (mirror CV helpers) and small API endpoints (safe)
    - Files to edit/create:
      - `utils/weaviate_store.py` (extend)
      - `app.py` (extend, non-breaking)
@@ -104,7 +118,7 @@ primary documentation; this file is for TODOs only.
    - Acceptance:
      - Hitting the endpoints returns 200 with JSON body when object exists, or 404/400 with a helpful message when not.
 
-8) Validation scripts and smoke-checks (final small commit)
+1. Validation scripts and smoke-checks (final small commit)
    - Files to edit/create:
      - `scripts/weaviate_smoke.py` (create)
    - Script responsibilities:

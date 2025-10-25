@@ -29,7 +29,7 @@ Note: the extraction pipeline is intentionally generic — it applies to both CV
 - `static/status.js` – shared in-app status and progress helpers used by the UI
  - `utils/csv_manager.py` – CSVStore and RolesStore encapsulating read/write of `data/applicants.csv` and `data/roles.csv`
 - `utils/openai_manager.py` – encapsulates OpenAI SDK + HTTP fallback (vector stores, file_search, text.format)
-- `prompts/` – prompt templates used by the OpenAI extraction flow (e.g., `cv_full_name_system.md`, `cv_full_name_user.md`)
+ - `prompts/` – prompt templates used by the OpenAI extraction flow (e.g., `extract_from_cv_system.md`, `extract_from_cv_user.md`)
 - `config/.env` – runtime configuration (mirrored by `config/.env-example`)
 - `config/settings.py` – central AppConfig loader for environment and paths
 - `utils/logger.py` – AppLogger writing to `LOG_FILE_PATH` with [TIMESTAMP] and kv helper

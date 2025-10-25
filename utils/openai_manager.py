@@ -46,8 +46,8 @@ class OpenAIManager:
             client = OpenAI()
 
             # Load prompts (now request a full profile JSON)
-            system_text = self._load_prompt("cv_full_name_system.md")
-            user_text = self._load_prompt("cv_full_name_user.md")
+            system_text = self._load_prompt("extract_from_cv_system.md")
+            user_text = self._load_prompt("extract_from_cv_user.md")
 
             # Upload file
             up = client.files.create(file=file_path.open("rb"), purpose="assistants")

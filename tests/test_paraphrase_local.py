@@ -68,7 +68,10 @@ def test_paraphrase_embedding_local():
     reported_device = getattr(model, "device", None) or getattr(model, "_target_device", None)
     assert reported_device is not None and "cuda" in str(reported_device).lower(), f"Model not on CUDA: {reported_device}"
 
-    vecs = model.encode(["hello world"], show_progress_bar=False)
+    # Load sample prompt from prompts/ to avoid hardcoded strings
+    prompt_path = PROJECT_ROOT / "prompts" / "sample_short_text_hello.md"
+    sample_text = prompt_path.read_text(encoding="utf-8").strip()
+    vecs = model.encode([sample_text], show_progress_bar=False)
     assert hasattr(vecs, "__len__")
     first = vecs[0]
     length = len(first) if hasattr(first, "__len__") else getattr(first, "shape")[0]
@@ -98,7 +101,9 @@ def main() -> int:
         return 4
 
     try:
-        vecs = model.encode(["hello world"], show_progress_bar=False)
+        prompt_path = PROJECT_ROOT / "prompts" / "sample_short_text_hello.md"
+        sample_text = prompt_path.read_text(encoding="utf-8").strip()
+        vecs = model.encode([sample_text], show_progress_bar=False)
         first = vecs[0]
         length = len(first) if hasattr(first, "__len__") else getattr(first, "shape")[0]
         print(f"Embedding length: {length}; sample values: {first[:6] if hasattr(first, '__len__') else first}")
