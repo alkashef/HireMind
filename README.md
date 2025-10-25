@@ -132,6 +132,105 @@ Note on generic handling: the pipeline is shared for both CVs and Roles — the 
 
 Below is a single numbered list of small, independent implementation steps. Each step is written so it can be implemented as one small commit by an LLM agent (e.g., GPT-5 mini in agent mode). Every step includes: files to edit/create, method names (use the standardized names), a concise description, constraints and "do not do" notes, and an explicit acceptance checklist that must pass before moving to the next step.
 
+Local Weaviate — setup & run (quick start)
+---------------------------------------
+
+If you want to run Weaviate locally for development and testing, follow these quick, platform-specific steps. The project provides a minimal `docker-compose.weaviate.yml` that launches a single-node Weaviate with vectorizer disabled (we supply vectors).
+
+Windows (cmd.exe)
+
+1. Make sure Docker Desktop is running.
+2. From the project root, start Weaviate:
+
+```
+docker compose -f docker-compose.weaviate.yml up -d
+```
+
+3. Wait a few seconds, then verify the container is running:
+
+```
+docker ps
+docker logs -f hiremind_weaviate
+```
+
+4. Probe the running instance using the included lightweight test:
+
+```
+set WEAVIATE_USE_LOCAL=true
+python tests/test_weaviate_local.py
+```
+
+PowerShell
+
+1. Start Docker Desktop.
+2. From the project root:
+
+```
+docker compose -f docker-compose.weaviate.yml up -d
+```
+
+3. Check status and logs:
+
+```
+docker ps
+docker logs -f hiremind_weaviate
+```
+
+4. Run the probe (PowerShell):
+
+```
+$env:WEAVIATE_USE_LOCAL = "true"; python tests/test_weaviate_local.py
+```
+
+Helper scripts (Windows)
+
+Two convenient helpers are provided under `scripts/` to start and stop the local Weaviate stack from the project root:
+
+```
+scripts\run_weaviate.bat   # starts Weaviate using docker compose
+scripts\stop_weaviate.bat  # stops and removes the compose stack
+```
+
+Run them from a cmd.exe prompt in the repository root. They wrap the `docker compose` commands and print status/errors to make local dev easier.
+
+Fallback: run the container directly (no compose)
+
+If Compose has issues, you can run the Weaviate image directly (cmd.exe example):
+
+```
+docker pull semitechnologies/weaviate:1.19.3
+docker run -d --name hiremind_weaviate -p 8080:8080 ^
+  -e AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true ^
+  -e PERSISTENCE_DATA_PATH=/var/lib/weaviate ^
+  -e DEFAULT_VECTORIZER_MODULE=none ^
+  -e ENABLE_MODULES=none ^
+  -v %cd%\\weaviate_data:/var/lib/weaviate ^
+  semitechnologies/weaviate:1.19.3
+```
+
+Notes & troubleshooting
+
+- If the Docker CLI reports it cannot connect to the engine (named-pipe / EOF errors on Windows), start or restart Docker Desktop and retry. `docker version` and `docker info` should report a running engine.
+- If the probe returns HTTP 200 but `tests/test_weaviate_local.py` prints "Skipping ensure_schema() (client missing)" then install the optional Python client in your virtualenv to enable `ensure_schema()`:
+
+```
+pip install weaviate-client
+```
+
+- To create the schema from the repository code (idempotent):
+
+```
+python -c "from utils.weaviate_store import WeaviateStore; s=WeaviateStore(url='http://localhost:8080'); print('ensure_schema:', s.ensure_schema())"
+```
+
+- To have `make_default_store()` pick up your environment automatically, set `WEAVIATE_URL`:
+
+```
+set WEAVIATE_URL=http://localhost:8080
+```
+
+These quick steps are intended for development. The README's numbered plan above documents the production-safe, idempotent workflow we follow when adding Weaviate integration in the codebase.
+
 1) Add runtime config keys (safe, non-breaking)
    - Files to edit/create:
      - `config/.env-example` (edit)

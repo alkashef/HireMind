@@ -72,3 +72,20 @@ class AppConfig:
     @property
     def openai_base_url(self) -> str:
         return os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+
+    @property
+    def weaviate_url(self) -> str | None:
+        """Optional Weaviate endpoint URL (e.g. https://<host>/v1)."""
+        return os.getenv("WEAVIATE_URL")
+
+    @property
+    def weaviate_api_key(self) -> str | None:
+        """Optional Weaviate API key or token."""
+        return os.getenv("WEAVIATE_API_KEY")
+
+    @property
+    def weaviate_batch_size(self) -> int:
+        try:
+            return int(os.getenv("WEAVIATE_BATCH_SIZE", "64"))
+        except Exception:
+            return 64
