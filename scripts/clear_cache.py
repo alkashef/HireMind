@@ -36,8 +36,9 @@ def find_cache_files(base_path: Path) -> List[Path]:
     to_delete: List[Path] = []
     
     for path in base_path.rglob("*"):
-        # Skip the models directory
-        if "models" in path.parts and path.is_dir():
+        # Always skip anything inside `models/` or `data/` directories to avoid accidental deletions
+        # This ensures the script will not remove model artifacts or user data.
+        if any(p in ("models", "data") for p in path.parts):
             continue
             
         # Check if path matches any cache pattern
