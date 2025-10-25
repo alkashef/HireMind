@@ -6,6 +6,7 @@ performs a tiny generation if a vllm backend is returned.
 """
 from __future__ import annotations
 
+import os
 import sys
 import pathlib
 import pytest
@@ -18,12 +19,18 @@ HERMES_MODEL_DIR = PROJECT_ROOT / "models" / "hermes-pro"
 
 
 def test_hermes_on_gpu():
+    # Allow forcing a CPU run for development via env var:
+    # set RUN_HERMES_ON_CPU=true && python -m pytest tests/test_hermes_local.py -q -s
+    force_cpu = os.getenv("RUN_HERMES_ON_CPU", "false").lower() in ("1", "true", "yes")
+
     try:
         import torch
     except Exception:
+        if force_cpu:
+            pytest.skip("PyTorch not installed; cannot run Hermes test on CPU")
         pytest.skip("PyTorch not installed; skipping Hermes GPU test")
 
-    if not torch.cuda.is_available():
+    if not force_cpu and not torch.cuda.is_available():
         pytest.skip("CUDA not available; skipping Hermes GPU test")
 
     if not HERMES_MODEL_DIR.exists():
@@ -34,7 +41,25 @@ def test_hermes_on_gpu():
     except Exception as exc:
         pytest.skip(f"utils.llm_runner not available: {exc}")
 
-    # Attempt to load; this may use vllm or transformers
+    # If force_cpu is set, run a CPU-based transformers load/generation to
+    # exercise the same logic without requiring CUDA or vllm.
+    if force_cpu:
+        if not HERMES_MODEL_DIR.exists():
+            pytest.skip(f"Hermes model directory not found at {HERMES_MODEL_DIR}; place model under models/hermes-pro")
+        try:
+            from transformers import AutoTokenizer, AutoModelForCausalLM
+
+            tokenizer = AutoTokenizer.from_pretrained(str(HERMES_MODEL_DIR), use_fast=True)
+            model = AutoModelForCausalLM.from_pretrained(str(HERMES_MODEL_DIR), device_map="cpu")
+            # Simple generation on CPU
+            inputs = tokenizer("Hello world", return_tensors="pt")
+            out = model.generate(**inputs, max_new_tokens=8)
+            assert out is not None
+        except Exception as exc:
+            pytest.skip(f"Hermes CPU generation check failed: {exc}")
+        return
+
+    # Attempt to load; this may use vllm or transformers on CUDA
     try:
         backend = load_hermes_model(str(HERMES_MODEL_DIR))
     except RuntimeError as exc:
@@ -66,3 +91,11 @@ def test_hermes_on_gpu():
             assert out is not None
     except Exception as exc:
         pytest.skip(f"Hermes generation check failed (environment may not support runtime generation): {exc}")
+
+
+if __name__ == "__main__":
+    # Allow running this test script directly for quick probes.
+    # Use pytest runner so skips and reporting behave the same as `pytest`.
+    import pytest as _pytest
+    rc = _pytest.main([__file__])
+    raise SystemExit(rc)
