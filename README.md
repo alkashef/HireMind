@@ -193,6 +193,18 @@ scripts\stop_weaviate.bat  # stops and removes the compose stack
 
 Run them from a cmd.exe prompt in the repository root. They wrap the `docker compose` commands and print status/errors to make local dev easier.
 
+Environment variable: WEAVIATE_DATA_PATH
+
+You can override where Weaviate persists its data on the host by setting `WEAVIATE_DATA_PATH` in `config/.env` or your environment. By default the project uses `data/weaviate_data`. If you set this variable, update the compose/run commands to mount that path.
+
+Example (cmd.exe):
+
+```
+set WEAVIATE_DATA_PATH=C:\path\to\persisted\weaviate
+docker compose -f docker-compose.weaviate.yml up -d
+```
+
+
 Fallback: run the container directly (no compose)
 
 If Compose has issues, you can run the Weaviate image directly (cmd.exe example):
@@ -204,7 +216,7 @@ docker run -d --name hiremind_weaviate -p 8080:8080 ^
   -e PERSISTENCE_DATA_PATH=/var/lib/weaviate ^
   -e DEFAULT_VECTORIZER_MODULE=none ^
   -e ENABLE_MODULES=none ^
-  -v %cd%\\weaviate_data:/var/lib/weaviate ^
+  -v %cd%\\data\\weaviate_data:/var/lib/weaviate ^
   semitechnologies/weaviate:1.19.3
 ```
 

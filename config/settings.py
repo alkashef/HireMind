@@ -89,3 +89,16 @@ class AppConfig:
             return int(os.getenv("WEAVIATE_BATCH_SIZE", "64"))
         except Exception:
             return 64
+
+    @property
+    def weaviate_data_path(self) -> Path:
+        """Host path where Weaviate should persist data when running locally.
+
+        Defaults to `<repo_root>/data/weaviate_data`. Returns a Path and ensures
+        the directory exists.
+        """
+        root = Path(__file__).resolve().parent.parent
+        default = root / "data" / "weaviate_data"
+        path = Path(os.getenv("WEAVIATE_DATA_PATH", str(default)))
+        path.mkdir(parents=True, exist_ok=True)
+        return path

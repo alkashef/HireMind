@@ -14,5 +14,5 @@ services:
       - DEFAULT_VECTORIZER_MODULE=none
       - ENABLE_MODULES=none
     volumes:
-      - ./weaviate_data:/var/lib/weaviate
+      - ./data/weaviate_data:/var/lib/weaviate
     restart: unless-stopped
