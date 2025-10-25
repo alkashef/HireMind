@@ -1,20 +1,22 @@
+--extra-index-url https://download.pytorch.org/whl/cu126
 
 Flask>=3.0.0
-loguru>=0.7.0
 openai>=1.63.0
 python-dotenv>=1.0.0
 requests>=2.31.0
 PyMuPDF>=1.22.0     # used for PDF text extraction (fitz)
 python-docx>=0.8.11 # used for DOCX text extraction
 
-# Model download / sentence embeddings
+# Embeddings and local model support
 sentence-transformers>=2.2.2
-huggingface-hub>=0.15.1
 transformers>=4.34.0
+torch>=2.0.0        # install CPU or CUDA wheel appropriate for your platform
 
+# Additional developer/runtime helpers used by `tests/` and `scripts/`:
+# - `huggingface-hub` is required by scripts/download_nous-hermes.py and
+#   scripts/download_paraphrase.py when using the HF downloader.
+# - `pytest` is required to run the test suite.
 
-# Vector DB client (Weaviate planned integration)
+huggingface-hub>=0.15.1
+pytest>=7.0.0
 weaviate-client>=3.23.0
-
-# Optional: cross-platform file locking for concurrent writes
-portalocker>=2.7.0

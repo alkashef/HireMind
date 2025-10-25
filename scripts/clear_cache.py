@@ -4,6 +4,7 @@ Script to clear all cache files from the project repository.
 Removes Python bytecode files, pytest cache, temporary files, and other cache types.
 """
 
+import argparse
 import os
 import shutil
 from pathlib import Path
@@ -50,40 +51,58 @@ def find_cache_files(base_path: Path) -> List[Path]:
     return to_delete
 
 
-def clear_cache(base_path: Path) -> None:
+def clear_cache(base_path: Path, dry_run: bool = False) -> None:
     """
-    Delete all cache files and directories found.
-    
+    Delete (or preview) cache files and directories found.
+
     Args:
         base_path: Base directory to clean
+        dry_run: If True, do not delete files; only print what would be removed.
     """
     cache_paths = find_cache_files(base_path)
-    
+
     deleted_count = 0
     failed_count = 0
-    
-    print("Clearing cache files...")
+
+    if dry_run:
+        print("Dry-run mode: the following paths would be removed:")
+    else:
+        print("Clearing cache files...")
+
     for path in cache_paths:
         try:
-            if path.is_dir():
-                shutil.rmtree(path)
-                print(f"Removed directory: {path}")
+            if dry_run:
+                if path.is_dir():
+                    print(f"Would remove directory: {path}")
+                else:
+                    print(f"Would remove file: {path}")
             else:
-                path.unlink()
-                print(f"Removed file: {path}")
+                if path.is_dir():
+                    shutil.rmtree(path)
+                    print(f"Removed directory: {path}")
+                else:
+                    path.unlink()
+                    print(f"Removed file: {path}")
             deleted_count += 1
         except Exception as e:
             print(f"Failed to remove {path}: {e}")
             failed_count += 1
-    
-    print(f"\nCache cleaning complete:")
-    print(f"- {deleted_count} items removed")
-    print(f"- {failed_count} items failed to remove")
+
+    if not dry_run:
+        print(f"\nCache cleaning complete:")
+        print(f"- {deleted_count} items removed")
+        print(f"- {failed_count} items failed to remove")
+    else:
+        print(f"\nDry-run summary: {len(cache_paths)} items would be removed")
 
 
 if __name__ == "__main__":
     # Get the project root directory (2 levels up from this script)
-    project_root = Path(__file__).parent.parent.resolve()
-    
+    parser = argparse.ArgumentParser(description="Clear project cache files (safe-guards against deleting models/data)")
+    parser.add_argument("--path", default=str(Path(__file__).parent.parent.resolve()), help="Project root path to scan")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be removed without deleting files")
+    args = parser.parse_args()
+
+    project_root = Path(args.path).resolve()
     print(f"Cleaning cache from: {project_root}")
-    clear_cache(project_root)
+    clear_cache(project_root, dry_run=args.dry_run)

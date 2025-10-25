@@ -52,47 +52,138 @@ OpenAI SDK version
 
 Older CSVs (from before prefixing) are read with backward-compatible field mapping so existing extractions continue to show in the UI. Employer names are now mapped under Experience (fallback reads Stability_EmployerNames).
 
-### How to Test
+## Setup for Development
 
-Run tests to verify the application components are working correctly:
-Test Database Connection
+#### Conda Environment
 
-python test/test_db.py
+1. Create a new Conda environment (Windows cmd.exe):
 
-This test connects to the Teradata database, retrieves the schema, and executes a sample query to validate connectivity.
-Test Model Integration
+```cmd
+conda create --name hiremind python=3.11
+conda activate hiremind
+```
 
-python test/test_model.py
+2. Install pip and build tools (if needed):
 
-This test verifies that:
+```cmd
+conda install pip
+```
 
-    The model files are present
-    The model loads correctly
-    The model can generate responses to prompts
+3. Install project dependencies:
 
-Test SQL Extraction
+```cmd
+pip install -r requirements.txt
+```
 
-python test/test_extract_sql.py
+#### GPU Configuration (recommended: CUDA 12.6 / cu126)
 
-This test validates the SQL extraction logic from model outputs.
-How to Run
+1. Install NVIDIA driver appropriate for your GPU (use NVIDIA site or
+     your package manager). Verify with `nvidia-smi`.
+2. Install the CUDA toolkit and cuDNN (follow NVIDIA instructions).
+3. Install PyTorch with a matching CUDA wheel. The project recommends CUDA
+     12.6 (cu126) for reproducible developer and CI setups. Two options:
 
-The application can be run in two modes:
-Web UI Mode (Default)
+```cmd
+# Option A: use the helper (prints and can run the install)
+python scripts\download_cuda.py --cuda 12.6
 
+# Option B: run pip directly (uses the index URL for cu126)
+pip uninstall torch torchvision torchaudio -y
+pip install torch --index-url https://download.pytorch.org/whl/cu126
+```
+
+4. Verify the CUDA-enabled torch install:
+
+```cmd
+python -c "import torch; print('torch:', torch.__version__); print('torch.cuda.is_available():', torch.cuda.is_available()); print('torch.version.cuda:', torch.version.cuda); print('device_count:', torch.cuda.device_count()); print('device_name:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no device')"
+```
+
+Notes:
+- If you cannot use CUDA on your machine, a CPU-only `torch` install is
+    supported but some local model tests will be skipped or slower.
+
+#### Download Models
+
+The project uses local models for embeddings and (optionally) LLM inference.
+Use the included scripts to download them into `models/`.
+
+- Paraphrase embeddings (sentence-transformers):
+
+```cmd
+python scripts\download_paraphrase.py
+```
+
+- Hermes / Nous models (GGUF / HF):
+
+```cmd
+python scripts\download_nous-hermes.py
+```
+
+Set `HF_HUB_OFFLINE=1` (or `set HF_HUB_OFFLINE=1` on Windows) to force
+offline usage of cached Hugging Face files once downloaded.
+
+#### Data and CSV
+
+- The CSV pipeline (`data/applicants.csv`, `data/roles.csv`) remains the
+    authoritative export. Weaviate integration runs in parallel and is optional.
+
+## How to Test
+
+Run the project's test suite with `pytest`. Examples:
+
+- Run everything:
+
+```cmd
+python -m pytest -q
+```
+
+- Run specific tests (fast probes):
+
+```cmd
+python -m pytest tests/test_gpu.py -q          # GPU probe and torch checks
+python -m pytest tests/test_weaviate_local.py -q  # Weaviate probe (if running locally)
+python -m pytest tests/test_extractors_local.py -q
+```
+
+Notes:
+- Some tests require optional packages or model files (e.g., `sentence-transformers`, `torch` with CUDA, Hermes models). The tests are written to skip with helpful messages when prerequisites are missing.
+- Prefer running tests in the project's virtual environment (`conda activate hiremind`).
+
+## How to Run
+
+#### Web UI Mode (Default)
+
+```cmd
 python app.py
+```
 
-This starts the web server on http://localhost:5000. On launch, the log will include entries like `APP_START` (server starting) and `APP_READY` (first request can be served). The `APP_START` log also includes `openai_version` and `has_responses` to help diagnose SDK mismatches. You can then:
+Starts the Flask UI on `http://localhost:5000`.
 
-    Connect to the database
-    Load the AI model
-    Enter natural language queries
-    Get translated SQL queries
-    Execute queries and view results
+#### Batch Mode
 
-Additionally, the current UI includes:
-    Applicants tab: use "CVs Repository:" and the Browse button to choose a local folder. The top bar includes a Refresh button to reload the list. The UI is split: left pane (50% width) shows the file list with filenames only (no full paths) and a footer with Select All and Extract buttons; single-click selects one file, while Ctrl/⌘-click toggles multiple and Shift-click selects a range. The list shows `N files | M selected | X duplicates found` and highlights duplicates (by content hash) in pink. The right pane renders a read-only, transposed two-column detail table (Header | Value) that is always visible: when a file is selected, it shows that record; when nothing is selected or not yet extracted, it remains visible with empty values. Selection is preserved after extraction. The first column width is fixed for readability. A status bar at the bottom is verbose: it shows loading states (e.g., computing duplicates, loading results), live extraction progress with elapsed time, and completion summaries (saved count and error count).
-    Roles tab: placeholder for future functionality.
+```cmd
+python app.py --batch
+```
+
+Processes the batch file specified by `QUESTIONS_PATH` in `config/.env` and writes results to an Excel file.
+
+## Developer notes
+
+- Developer TODOs and ongoing work items live in `TODO.md`. Keep that file
+    synced with this README's Detailed step-by-step plan; `README.md` is
+    documentation-only while `TODO.md` is for in-progress tasks and small
+    commits.
+- Safe cleaning: `scripts/clear_cache.py` will skip anything inside
+    `models/` and `data/` to avoid accidental deletion of model artifacts or
+    user data. Use `--dry-run` to preview deletions.
+- Configuration: use `config/.env` (local) and keep `config/.env-example` as
+    the template for required and optional environment variables.
+ - Developer GPU guidance: for reproducible developer setups we recommend
+   using CUDA 12.6 (package tag `cu126`) as the canonical dev CUDA runtime.
+   The repository's `requirements.txt` includes an extra-index-url for `cu126`
+   and `scripts/download_cuda.py --cuda 12.6` prints a matching `pip install`
+   command. If you want GPU-enabled `torch`, install the wheel for `cu126` to
+   match CI/dev expectations and local tests.
 
 ## Batch Mode
 
