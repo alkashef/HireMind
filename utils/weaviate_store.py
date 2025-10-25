@@ -1,156 +1,231 @@
-"""Safe, minimal Weaviate client wrapper.
+"""Lightweight Weaviate wrapper used by HireMind.
 
-This module provides a small WeaviateStore class with an idempotent
-ensure_schema() method. It is intentionally conservative: if no
-configuration is provided it becomes a no-op. The goal is to keep the
-CSV pipeline authoritative and make the Weaviate integration safe to add
-as a parallel store.
+This module implements a minimal `WeaviateStore` class with an idempotent
+`ensure_schema()` method that creates three classes in Weaviate:
+ - CVDocument
+ - CVSection
+ - Role
 
-Design contracts (small):
-- Inputs: url (str|None), api_key (str|None), batch_size (int)
-- Outputs: methods either return True on success or raise ValueError on
-  invalid arguments. When unconfigured, ensure_schema() returns False but
-  does not raise.
-- Error modes: When weaviate client import is missing or connection fails,
-  keep failure local and return False; do not raise during module import.
-
-Usage:
-    from config import settings
-    store = WeaviateStore(settings.WEAVIATE_URL, settings.WEAVIATE_API_KEY, settings.WEAVIATE_BATCH_SIZE)
-    store.ensure_schema()
-
-The implementation avoids creating classes or writing data. It only
-creates the client and ensures the expected schema exists when a URL is
-provided.
+If `url` is not provided or the optional `weaviate` client is not installed,
+`ensure_schema()` will be a no-op and return gracefully.
 """
 from __future__ import annotations
 
 from typing import Optional
 import logging
+import json
 
-from config import settings
-
-LOG = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class WeaviateStore:
-    """Lightweight safe wrapper around a weaviate client.
+    """Small wrapper around the optional weaviate client.
 
-    If initialized with a falsy URL, methods become safe no-ops.
+    The wrapper intentionally avoids a hard dependency on the `weaviate-client`
+    package. If `url` is falsy or the client package is missing, methods that
+    interact with a remote Weaviate instance will return gracefully.
     """
 
-    def __init__(self, url: Optional[str], api_key: Optional[str] = None, batch_size: int = 64):
+    def __init__(self, url: Optional[str] = None, api_key: Optional[str] = None, batch_size: int = 64):
         self.url = url or None
         self.api_key = api_key or None
         self.batch_size = int(batch_size or 64)
-        self._client = None
+        self.client = None
 
-    def _maybe_import_client(self):
-        if not self.url:
-            LOG.debug("Weaviate URL not configured; weaviate_store will be a no-op.")
-            return None
-        if self._client is not None:
-            return self._client
-        try:
-            import weaviate
+        if self.url:
+            try:
+                import weaviate  # type: ignore
 
-            client = weaviate.Client(url=self.url, additional_headers={"X-API-Key": self.api_key} if self.api_key else None)
-            self._client = client
-            return client
-        except Exception:  # keep broad to avoid crashing when library missing or connection issues
-            LOG.exception("Failed to import or initialize weaviate client; Weaviate operations will be disabled.")
-            self._client = None
-            return None
+                # Prefer explicit auth helper if available, fall back to simple client
+                try:
+                    auth = getattr(weaviate.auth, "AuthApiKey", None)
+                    if auth and self.api_key:
+                        auth_obj = weaviate.auth.AuthApiKey(api_key=self.api_key)  # type: ignore
+                        self.client = weaviate.Client(url=self.url, auth_client_secret=auth_obj)  # type: ignore
+                    else:
+                        self.client = weaviate.Client(url=self.url)  # type: ignore
+                except Exception:
+                    self.client = weaviate.Client(url=self.url)  # type: ignore
 
-    def ensure_schema(self) -> bool:
-        """Ensure the minimal schema exists in Weaviate.
+                logger.info("Weaviate client initialized for %s", self.url)
+            except Exception as exc:
+                logger.warning("Weaviate client unavailable or failed to initialize: %s", exc)
+                self.client = None
 
-        Returns True if schema exists or was created, False if operation
-        could not be completed due to missing configuration or errors.
-        """
-        client = self._maybe_import_client()
-        if client is None:
+    def _class_exists(self, class_name: str) -> bool:
+        if not self.client:
             return False
-
         try:
-            # Define desired classes. These are intentionally minimal and
-            # match the README plan. Vectorizer is set to 'none' as we will
-            # supply external vectors.
-            desired = {
-                "CVDocument": {
-                    "class": "CVDocument",
-                    "vectorizer": "none",
-                    "properties": [
-                        {"name": "applicant_id", "dataType": ["string"]},
-                        {"name": "filename", "dataType": ["string"]},
-                    ],
-                },
-                "CVSection": {
-                    "class": "CVSection",
-                    "vectorizer": "none",
-                    "properties": [
-                        {"name": "document_id", "dataType": ["string"]},
-                        {"name": "text", "dataType": ["text"]},
-                        {"name": "sha256", "dataType": ["string"]},
-                    ],
-                },
-                "Role": {
-                    "class": "Role",
-                    "vectorizer": "none",
-                    "properties": [
-                        {"name": "role_id", "dataType": ["string"]},
-                        {"name": "title", "dataType": ["string"]},
-                        {"name": "description", "dataType": ["text"]},
-                    ],
-                },
-            }
-
-            existing = {c["class"]: c for c in client.schema.get("classes") or []}
-
-            for name, cls in desired.items():
-                if name in existing:
-                    LOG.debug("Weaviate class '%s' already exists; skipping creation.", name)
-                    continue
-                LOG.info("Creating Weaviate class: %s", name)
-                client.schema.create_class(cls)
-
-            return True
+            schema = self.client.schema.get() or {}
+            classes = schema.get("classes") or []
+            return any(c.get("class") == class_name for c in classes)
         except Exception:
-            LOG.exception("Error while ensuring Weaviate schema.")
             return False
 
+    def ensure_schema(self) -> None:
+        """Idempotently ensure the required Weaviate classes exist.
 
-def make_default_store() -> WeaviateStore:
-    """Factory that reads settings and returns a WeaviateStore instance.
+        If `weaviate_url` was not provided or the client package is missing,
+        this method is a no-op and returns gracefully.
+        """
+        if not self.url:
+            logger.debug("Skipping ensure_schema(): weaviate URL not configured")
+            return
 
-    This function intentionally imports settings lazily so the module is
-    safe to import even if environment variables aren't present yet.
+        if not self.client:
+            logger.debug("Skipping ensure_schema(): weaviate client missing/unavailable")
+            return
 
-    Behavior:
-    - If `settings.WEAVIATE_URL` is truthy, use it.
-    - Else if `settings.WEAVIATE_USE_LOCAL` is truthy, default to
-      `http://localhost:8080` (convenience for local development).
-    - Otherwise, return a no-op store (url=None).
-    """
-    try:
-        url = getattr(settings, "WEAVIATE_URL", None)
-        api_key = getattr(settings, "WEAVIATE_API_KEY", None)
-        batch = getattr(settings, "WEAVIATE_BATCH_SIZE", 64)
-        use_local = str(getattr(settings, "WEAVIATE_USE_LOCAL", "false")).lower() in ("1", "true", "yes")
-    except Exception:
-        url = None
-        api_key = None
-        batch = 64
-        use_local = False
+        classes = [
+            {
+                "class": "CVDocument",
+                "vectorizer": "none",
+                "properties": [
+                    {"name": "sha", "dataType": ["string"]},
+                    {"name": "filename", "dataType": ["string"]},
+                    {"name": "metadata", "dataType": ["text"]},
+                    {"name": "full_text", "dataType": ["text"]},
+                ],
+            },
+            {
+                "class": "CVSection",
+                "vectorizer": "none",
+                "properties": [
+                    {"name": "parent_sha", "dataType": ["string"]},
+                    {"name": "section_type", "dataType": ["string"]},
+                    {"name": "section_text", "dataType": ["text"]},
+                ],
+            },
+            {
+                "class": "Role",
+                "vectorizer": "none",
+                "properties": [
+                    {"name": "sha", "dataType": ["string"]},
+                    {"name": "filename", "dataType": ["string"]},
+                    {"name": "role_text", "dataType": ["text"]},
+                ],
+            },
+        ]
 
-    if not url and use_local:
-        url = "http://localhost:8080"
+        for cls in classes:
+            class_name = cls.get("class")
+            if self._class_exists(class_name):
+                logger.debug("Weaviate class '%s' already exists, skipping", class_name)
+                continue
+            try:
+                self.client.schema.create_class(cls)  # type: ignore
+                logger.info("Created Weaviate class: %s", class_name)
+            except Exception as exc:
+                logger.warning("Failed to create Weaviate class '%s': %s", class_name, exc)
 
-    return WeaviateStore(url=url, api_key=api_key, batch_size=batch)
+    def _find_cv_by_sha(self, sha: str) -> tuple[Optional[str], Optional[dict]]:
+        """Return (uuid, properties) for the CVDocument with matching sha, or (None, None).
+
+        Uses a GraphQL query with a where filter on the `sha` property. If the
+        client is unavailable or an error occurs this returns (None, None).
+        """
+        if not self.client:
+            return None, None
+
+        try:
+            where = {"path": ["sha"], "operator": "Equal", "valueString": sha}
+            # request id via _additional
+            resp = (
+                self.client.query
+                .get("CVDocument", ["sha", "filename", "metadata", "full_text"])
+                .with_where(where)
+                .with_additional(["id"])
+                .do()
+            )
+            items = (resp.get("data", {}).get("Get", {}).get("CVDocument") or [])
+            if not items:
+                return None, None
+            first = items[0]
+            # additional id may be under _additional
+            additional = first.get("_additional") or {}
+            uuid = additional.get("id")
+            return uuid, first
+        except Exception as exc:
+            logger.warning("Error querying Weaviate for sha=%s: %s", sha, exc)
+            return None, None
+
+    def write_cv_to_db(self, sha: str, filename: str, full_text: str, attributes: dict) -> dict:
+        """Create or update a CVDocument record keyed by `sha`.
+
+        This is idempotent: repeated calls with the same `sha` will update the
+        existing object. When Weaviate is not configured this returns a dict
+        describing the no-op and does not raise.
+        Returns a dict: {sha, id, created (bool), weaviate_ok (bool)}.
+        """
+        if not self.client:
+            logger.debug("write_cv_to_db: weaviate client missing; skipping upsert for %s", sha)
+            return {"sha": sha, "id": None, "created": False, "weaviate_ok": False}
+
+        uuid, existing = self._find_cv_by_sha(sha)
+
+        data_obj = {
+            "sha": sha,
+            "filename": filename,
+            # store attributes as JSON text in the 'metadata' text field
+            "metadata": json.dumps(attributes or {}),
+            "full_text": full_text or "",
+        }
+
+        try:
+            if uuid:
+                # update
+                self.client.data_object.update(data_obj, "CVDocument", uuid=uuid)  # type: ignore
+                logger.info("Updated CVDocument sha=%s id=%s", sha, uuid)
+                return {"sha": sha, "id": uuid, "created": False, "weaviate_ok": True}
+            else:
+                new_id = self.client.data_object.create(data_obj, "CVDocument")  # type: ignore
+                # some client versions return dict with 'id', others return id string
+                new_uuid = None
+                if isinstance(new_id, dict):
+                    new_uuid = new_id.get("id")
+                else:
+                    new_uuid = new_id
+                logger.info("Created CVDocument sha=%s id=%s", sha, new_uuid)
+                return {"sha": sha, "id": new_uuid, "created": True, "weaviate_ok": True}
+        except Exception as exc:
+            logger.warning("Failed to upsert CVDocument sha=%s: %s", sha, exc)
+            return {"sha": sha, "id": None, "created": False, "weaviate_ok": False}
+
+    def read_cv_from_db(self, sha: str) -> Optional[dict]:
+        """Return the CVDocument properties for the given sha, or None if missing.
+
+        When Weaviate is not configured this returns None.
+        """
+        if not self.client:
+            logger.debug("read_cv_from_db: weaviate client missing; returning None for %s", sha)
+            return None
+
+        uuid, props = self._find_cv_by_sha(sha)
+        if not props:
+            return None
+
+        # props already contains sha, filename, metadata, full_text; metadata is JSON text
+        try:
+            metadata = props.get("metadata")
+            if metadata:
+                try:
+                    metadata_obj = json.loads(metadata)
+                except Exception:
+                    metadata_obj = metadata
+            else:
+                metadata_obj = None
+        except Exception:
+            metadata_obj = None
+
+        result = {
+            "id": (props.get("_additional") or {}).get("id") if isinstance(props, dict) else None,
+            "sha": props.get("sha"),
+            "filename": props.get("filename"),
+            "metadata": metadata_obj,
+            "full_text": props.get("full_text"),
+        }
+        return result
 
 
-if __name__ == "__main__":
-    # quick smoke test that is safe: will not raise if unconfigured.
-    store = make_default_store()
-    ok = store.ensure_schema()
-    print("Weaviate schema ensured:" , ok)
+__all__ = ["WeaviateStore"]
+
