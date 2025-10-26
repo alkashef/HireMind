@@ -5,9 +5,11 @@ and call `generate()` from application code. The loader supports 4-bit
 quantization (bitsandbytes) and caches the loaded tokenizer+model for reuse.
 
 Usage:
+    from config.settings import AppConfig
     from utils.hermes_client import HermesClient
 
-    client = HermesClient(model_dir="models/hermes-pro", quantize_4bit=True)
+    cfg = AppConfig()
+    client = HermesClient(model_dir="models/hermes-pro", quantize_4bit=True, cfg=cfg)
     # Prefer loading prompts from `prompts/` rather than hardcoding text
     text = client.generate_from_prompt_file("prompt_summarize_short.md", max_new_tokens=64)
 
@@ -20,8 +22,9 @@ from __future__ import annotations
 from typing import Optional
 import logging
 import threading
-import os
 from pathlib import Path
+
+from config.settings import AppConfig
 
 logger = logging.getLogger(__name__)
 
@@ -54,15 +57,13 @@ class HermesClient:
         temperature: Optional[float] = None,
         num_beams: Optional[int] = None,
         max_new_tokens: Optional[int] = None,
+        cfg: Optional[AppConfig] = None,
     ):
         self.model_dir = model_dir
-        # Environment-driven defaults (if explicit args are None)
-        env_quant = os.getenv("HERMES_QUANTIZE_4BIT")
+        # Configuration-driven defaults (AppConfig reads .env). Explicit args win.
+        self.cfg = cfg or AppConfig()
         if quantize_4bit is None:
-            if env_quant is None:
-                self.quantize_4bit = True
-            else:
-                self.quantize_4bit = env_quant.lower() in ("1", "true", "yes")
+            self.quantize_4bit = self.cfg.hermes_quantize_4bit
         else:
             self.quantize_4bit = quantize_4bit
 
@@ -80,9 +81,13 @@ class HermesClient:
             except Exception:
                 return default
 
-        self.temperature = temperature if temperature is not None else _env_float("HERMES_TEMPERATURE", 0.0)
-        self.num_beams = num_beams if num_beams is not None else _env_int("HERMES_NUM_BEAMS", 1)
-        self.max_new_tokens = max_new_tokens if max_new_tokens is not None else _env_int("HERMES_MAX_NEW_TOKENS", 128)
+        self.temperature = (
+            temperature if temperature is not None else float(self.cfg.hermes_temperature)
+        )
+        self.num_beams = num_beams if num_beams is not None else int(self.cfg.hermes_num_beams)
+        self.max_new_tokens = (
+            max_new_tokens if max_new_tokens is not None else int(self.cfg.hermes_max_new_tokens)
+        )
 
         self.tokenizer = None
         self.model = None
@@ -201,7 +206,8 @@ def get_global_client(model_dir: str = "models/hermes-pro", quantize_4bit: bool 
     global _global_client
     with _global_lock:
         if _global_client is None:
-            _global_client = HermesClient(model_dir=model_dir, quantize_4bit=quantize_4bit)
+            cfg = AppConfig()
+            _global_client = HermesClient(model_dir=model_dir, quantize_4bit=quantize_4bit, cfg=cfg)
         return _global_client
 
 

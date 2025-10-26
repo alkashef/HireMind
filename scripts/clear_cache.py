@@ -48,6 +48,17 @@ def find_cache_files(base_path: Path) -> List[Path]:
         elif path.is_file() and any(path.name.endswith(pattern) for pattern in cache_patterns):
             to_delete.append(path)
     
+    # Additionally, always remove all files and subdirectories under the top-level `logs/`
+    # directory when present. We prefer to clear the contents but keep the `logs/`
+    # directory itself in place.
+    logs_dir = base_path / "logs"
+    if logs_dir.exists() and logs_dir.is_dir():
+        for child in logs_dir.iterdir():
+            # Skip if child is the project `models` or `data` directories by mistake
+            if any(p in ("models", "data") for p in child.parts):
+                continue
+            to_delete.append(child)
+
     return to_delete
 
 

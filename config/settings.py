@@ -141,3 +141,46 @@ class AppConfig:
     @property
     def prompt_summarize_this(self) -> str:
         return os.getenv("PROMPT_SUMMARIZE_THIS", "summarize_this.txt")
+
+    # Hermes model configuration (HF-format model runtime defaults)
+    @property
+    def hermes_model_dir(self) -> str:
+        return os.getenv("HERMES_MODEL_DIR", "models/hermes-pro")
+
+    @property
+    def hermes_quantize_4bit(self) -> bool:
+        v = os.getenv("HERMES_QUANTIZE_4BIT")
+        if v is None:
+            return True
+        return str(v).lower() in ("1", "true", "yes")
+
+    @property
+    def hermes_temperature(self) -> float:
+        try:
+            return float(os.getenv("HERMES_TEMPERATURE", "0.0"))
+        except Exception:
+            return 0.0
+
+    @property
+    def hermes_num_beams(self) -> int:
+        try:
+            return int(os.getenv("HERMES_NUM_BEAMS", "1"))
+        except Exception:
+            return 1
+
+    @property
+    def hermes_max_new_tokens(self) -> int:
+        try:
+            return int(os.getenv("HERMES_MAX_NEW_TOKENS", "128"))
+        except Exception:
+            return 128
+
+    # Paraphrase/embedding model configuration
+    @property
+    def paraphrase_model_dir(self) -> str:
+        return os.getenv("PARAPHRASE_MODEL_DIR", "models/paraphrase-MiniLM-L12-v2")
+
+    @property
+    def paraphrase_device(self) -> str:
+        # Default to cuda so embeddings load on GPU when available
+        return os.getenv("PARAPHRASE_DEVICE", "cuda")

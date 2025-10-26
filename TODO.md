@@ -5,20 +5,6 @@ primary documentation; this file is for TODOs only.
 
 ## Current actionable todos
 
-1. Make the generate_from_prompt method a separate utility under the utils folder. It should be generic.  To be used everywhre in the #codebase and should depend on the env file and settings.py to get the right prompt files.
-
-1. revise the env file and edit it directly if necessary to make sure the hermes model params are exposed
-
-1. create a paraphrase clinet similar to the hermes client
-
-1. update the paraphrase test to followthe same approcah as the hermes test wit hthe same assumptions
-
-1. check that the paraphrase download script downloads the hf version
-
-1. remove all files under the logs folder when cleaning the #codebase using the scripts/clear_cache.py script.
-
-1. there are 2 test_hermes files, what's the difference between them?
-
 1. Add runtime config keys (safe, non-breaking)
    - Files to edit/create:
      - `config/.env-example` (edit)

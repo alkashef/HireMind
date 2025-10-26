@@ -20,7 +20,7 @@
 - Reuse existing functions or classes when possible.
 - Always encapsulate new functionality in methods.
 - Avoid redundancy and keep the code concise.
-- Do **NOT** implement tests.
+- Do NOT create tests or test files unless explicitly requested by the user; do not add tests without a direct prompt.
 - Do **NOT** implement fallbacks.
 - Use a logger to log all details to the file specified in `LOG_FILE_PATH` from the `.env` file. Precede each log entry with a `[TIMESTAMP]` using the local computer clock.
 - Do NOT hardcode prompt templates or prompt text inside source files, tests, or scripts. Place all prompt templates in the repository `prompts/` folder and load them at runtime (e.g., `generate_from_prompt_file()` in `utils.hermes_client`).
@@ -46,7 +46,7 @@
 - **After each code edit or ask, update:
   - `requirements.txt` if new libraries are used, versions changed, or libraries removed. 
   - `README.md` if new features or significant changes are introduced. Include how to setup and test. 
-  - `TODO.md` if new tasks are added or existing ones are completed.**
+- Frequently persist your internal todo list to `TODO.md` after making or completing tasks so the project state stays in sync.
 
 ## Communication
 - Avoid repetition of instructions or disclaimers.
