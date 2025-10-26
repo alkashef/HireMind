@@ -1,24 +1,35 @@
-"""Minimal Weaviate wrapper: create schema classes (idempotent) and small helpers.
+"""Weaviate integration helpers used by the HireMind project.
 
-Design decisions based on project policy:
-- Configuration is read from environment via `config.settings.AppConfig` unless
-  explicit constructor args are provided (to support the local test runner).
-- The module imports the `weaviate` client library directly and does NOT
-  swallow ImportError; the application/tests should ensure the dependency is
-  installed when they intend to use the client.
-- All logging uses the project `AppLogger` (from `utils.logger`).
+This module provides a small, opinionated wrapper around the `weaviate` Python
+client. The main responsibilities are:
 
-Behavior summary:
-- `WeaviateStore.__init__` accepts optional `url`, `api_key`, `batch_size` but
-  will fall back to the values from `AppConfig` when args are None. If
-  `WEAVIATE_USE_LOCAL` is set and no explicit URL is provided, the default
-  `http://localhost:8080` is used.
-- `ensure_schema()` is idempotent: it queries the existing schema and only
-  creates the three required classes when missing. It raises exceptions on
-  client or server failures (no silent fallbacks).
+- Create an idempotent Weaviate schema for CV and Role documents/sections.
+- Provide simple read/write helpers for top-level documents (CVDocument,
+    RoleDocument) keyed by content SHA.
+- Provide section upsert helpers that attach vector embeddings to section
+    objects (CVSection/RoleSection) and keep operations idempotent.
+- Provide a convenience orchestrator `process_file_and_upsert()` that ties
+    extraction, splitting, embedding, and upserting into a single call.
 
-This file implements only the small skeleton required by the TODO: no
-document upserts or embedding logic here.
+Design and error-handling notes
+- Configuration: values are read from `config.settings.AppConfig` when the
+    constructor arguments are not provided. Use env vars or AppConfig to change
+    runtime behavior.
+- Dependency policy: the module intentionally imports `weaviate` at the top so
+    missing dependency errors are visible early (no silent fallbacks).
+- Safety: methods that perform network calls raise on fatal client errors; the
+    orchestrator is defensive and will still return extraction results when the
+    Weaviate client is not configured (useful for local testing).
+
+Quick usage example
+        from utils.weaviate_store import WeaviateStore
+        ws = WeaviateStore()             # reads settings from AppConfig
+        ws.ensure_schema()               # create classes if missing
+        res = ws.process_file_and_upsert(Path("/path/to/cv.pdf"))
+
+The module focuses on clarity and determinism rather than providing a
+feature-complete ODM. Keep the CSV pipeline unchanged; Weaviate is a
+parallel, optional store.
 """
 from __future__ import annotations
 
@@ -345,9 +356,27 @@ class WeaviateStore:
 
     # ------------------------- sections & processing -----------------------
     def _split_into_sections(self, text: str, max_chars: int = 800) -> List[dict]:
-        """Deterministic splitter: split text into sections of roughly max_chars.
+        """Deterministic text splitter used to create section candidates.
 
-        Returns a list of dicts: {"section_type": str, "section_text": str}.
+        This splitter is intentionally simple and deterministic: it first
+        breaks the document by blank-line paragraph boundaries and then
+        accumulates paragraphs into chunks of approximately ``max_chars``
+        characters. The approach favors readability and reproducibility over
+        semantic boundaries.
+
+        Parameters
+        - text: full document text (non-empty string)
+        - max_chars: target maximum characters per resulting section
+
+        Returns
+        - list[dict]: each dict contains:
+            - 'section_type' (currently always 'section')
+            - 'section_text' (string)
+
+        Notes
+        - The function guarantees at least one section for non-empty input.
+        - Keep this function lightweight so it can be called in-process for
+        many documents without heavy CPU/memory use.
         """
         if not text:
             return []
