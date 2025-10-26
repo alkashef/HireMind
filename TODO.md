@@ -5,45 +5,6 @@ primary documentation; this file is for TODOs only.
 
 ## Current actionable todos
 
-1. Add runtime config keys (safe, non-breaking)
-   - Files to edit/create:
-     - `config/.env-example` (edit)
-     - `config/settings.py` (ensure properties exposed)
-   - Methods/props to add or confirm:
-     - `AppConfig.weaviate_url`, `AppConfig.weaviate_api_key`, `AppConfig.weaviate_batch_size`
-   - Description:
-     - Add placeholder env vars to `.env-example` and expose read-only properties in `config/settings.py` so other modules can import the config without changing runtime behavior when values are unset.
-   - Constraints / do not:
-     - Do not connect to Weaviate or add logic that fails if the keys are missing. Keep behavior read-only and optional.
-   - Acceptance (one-line checks):
-     - `config/settings.py` imports and exposes the three properties and `config/.env-example` contains the three placeholder keys.
-
-1. Create minimal `utils/weaviate_store.py` skeleton with `ensure_schema()` (idempotent)
-   - Files to edit/create:
-     - `utils/weaviate_store.py` (create)
-   - Methods/classes to implement:
-     - class `WeaviateStore` with `__init__(self, url: str | None, api_key: str | None, batch_size: int = 64)`
-     - `ensure_schema(self) -> None` — only schema creation; do not write documents.
-   - Description:
-     - Implement a small wrapper that optionally initializes a Weaviate client when `weaviate_url` is set. `ensure_schema()` creates three classes: `CVDocument`, `CVSection`, and `Role` with `vectorizer: "none"` and minimal properties (sha, filename, metadata, full_text for CVDocument; parent_sha, section_type, section_text for CVSection; role_text for Role).
-   - Constraints / do not:
-     - Do not create or upsert any CV/Section objects here. Keep class creation idempotent. If `weaviate_url` is unset, `ensure_schema()` should be a no-op that returns gracefully.
-   - Acceptance:
-     - Importing `WeaviateStore` and calling `WeaviateStore(...).ensure_schema()` does not raise if `weaviate_url` is not configured, and when configured, required classes exist in Weaviate.
-
-1. Add CV write/read minimal helpers (metadata-only, no sections yet)
-   - Files to edit/create:
-     - `utils/weaviate_store.py` (extend)
-   - Methods to add:
-     - `write_cv_to_db(sha: str, filename: str, full_text: str, attributes: dict) -> dict` — create or update a `CVDocument` record (metadata + full_text). Implementation may call internal `_find_by_sha()` and `_create_or_update()` helpers.
-     - `read_cv_from_db(sha: str) -> dict | None` — return the CVDocument metadata and `full_text` (no sections yet).
-   - Description:
-     - Implement idempotent upsert behavior keyed by `sha`. Do not split text or create sections. Persist metadata fields in Weaviate properties that map to the CSV columns.
-   - Constraints / do not:
-     - Do not attempt to compute or store section embeddings. Keep embeddings and sections out of scope for this step.
-   - Acceptance:
-     - After calling `write_cv_to_db(...)`, `read_cv_from_db(sha)` returns the same metadata and `full_text`.
-
 1. Add extractor utilities (PDF/DOCX) and SHA helper (local, deterministic)
    - Files to edit/create:
      - `utils/extractors.py` (create)
@@ -86,6 +47,8 @@ primary documentation; this file is for TODOs only.
      - Keep the CSV write path authoritative; do not remove or alter CSV writes. This function should *also* be safe to run when Weaviate is not configured — in that case it should return a clear status and exit gracefully.
    - Acceptance:
      - `process_file_and_upsert()` returns a dict summarizing `sha`, `num_sections`, and `weaviate_ok: bool`. When Weaviate is configured, `CVSection` objects exist with non-empty vectors.
+
+   - Status: partial — `write_cv_to_db` and `read_cv_from_db` have been implemented in `utils/weaviate_store.py` (the schema was expanded to explicit CSV-mapped properties and `read_cv_from_db` now returns an `attributes` dict). Remaining: `upsert_cv_section` and `process_file_and_upsert` orchestration.
 
 1. Add role write/read helpers (mirror CV helpers) and small API endpoints (safe)
    - Files to edit/create:

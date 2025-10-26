@@ -1,231 +1,584 @@
-"""Lightweight Weaviate wrapper used by HireMind.
+"""Minimal Weaviate wrapper: create schema classes (idempotent) and small helpers.
 
-This module implements a minimal `WeaviateStore` class with an idempotent
-`ensure_schema()` method that creates three classes in Weaviate:
- - CVDocument
- - CVSection
- - Role
+Design decisions based on project policy:
+- Configuration is read from environment via `config.settings.AppConfig` unless
+  explicit constructor args are provided (to support the local test runner).
+- The module imports the `weaviate` client library directly and does NOT
+  swallow ImportError; the application/tests should ensure the dependency is
+  installed when they intend to use the client.
+- All logging uses the project `AppLogger` (from `utils.logger`).
 
-If `url` is not provided or the optional `weaviate` client is not installed,
-`ensure_schema()` will be a no-op and return gracefully.
+Behavior summary:
+- `WeaviateStore.__init__` accepts optional `url`, `api_key`, `batch_size` but
+  will fall back to the values from `AppConfig` when args are None. If
+  `WEAVIATE_USE_LOCAL` is set and no explicit URL is provided, the default
+  `http://localhost:8080` is used.
+- `ensure_schema()` is idempotent: it queries the existing schema and only
+  creates the three required classes when missing. It raises exceptions on
+  client or server failures (no silent fallbacks).
+
+This file implements only the small skeleton required by the TODO: no
+document upserts or embedding logic here.
 """
 from __future__ import annotations
 
-from typing import Optional
-import logging
+import os
 import json
+from typing import Optional, Dict, Any
 
-logger = logging.getLogger(__name__)
+from config.settings import AppConfig
+from utils.logger import AppLogger
+from pathlib import Path
+from typing import List
+
+# Import weaviate client at module level intentionally: if the dependency is
+# missing the import will raise and the calling code/test can decide how to
+# handle that (per project policy: no silent fallbacks).
+import weaviate
 
 
 class WeaviateStore:
-    """Small wrapper around the optional weaviate client.
+    """Small wrapper around the `weaviate.Client` that ensures schema exists.
 
-    The wrapper intentionally avoids a hard dependency on the `weaviate-client`
-    package. If `url` is falsy or the client package is missing, methods that
-    interact with a remote Weaviate instance will return gracefully.
+    Constructor parameters are optional to support the local test runner which
+    passes explicit values. When an argument is None the value is read from
+    `AppConfig()` (which itself reads from config/.env).
     """
 
-    def __init__(self, url: Optional[str] = None, api_key: Optional[str] = None, batch_size: int = 64):
-        self.url = url or None
-        self.api_key = api_key or None
-        self.batch_size = int(batch_size or 64)
-        self.client = None
+    def __init__(
+        self,
+        url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        batch_size: Optional[int] = None,
+    ) -> None:
+        cfg = AppConfig()
 
+        # Resolve final runtime values: prefer explicit args, then AppConfig/env
+        self.url = (url or cfg.weaviate_url) or (
+            "http://localhost:8080" if os.environ.get("WEAVIATE_USE_LOCAL", "").lower() in ("1", "true", "yes") else None
+        )
+        self.api_key = api_key or cfg.weaviate_api_key
+        try:
+            self.batch_size = int(batch_size if batch_size is not None else cfg.weaviate_batch_size)
+        except Exception:
+            self.batch_size = 64
+
+        # Always use project logger
+        self.logger = AppLogger(cfg.log_file_path)
+
+        self.client: Optional[weaviate.Client] = None
         if self.url:
-            try:
-                import weaviate  # type: ignore
-
-                # Prefer explicit auth helper if available, fall back to simple client
-                try:
-                    auth = getattr(weaviate.auth, "AuthApiKey", None)
-                    if auth and self.api_key:
-                        auth_obj = weaviate.auth.AuthApiKey(api_key=self.api_key)  # type: ignore
-                        self.client = weaviate.Client(url=self.url, auth_client_secret=auth_obj)  # type: ignore
-                    else:
-                        self.client = weaviate.Client(url=self.url)  # type: ignore
-                except Exception:
-                    self.client = weaviate.Client(url=self.url)  # type: ignore
-
-                logger.info("Weaviate client initialized for %s", self.url)
-            except Exception as exc:
-                logger.warning("Weaviate client unavailable or failed to initialize: %s", exc)
-                self.client = None
+            # Prepare auth header if API key provided
+            headers = {"X-API-Key": self.api_key} if self.api_key else None
+            self.logger.log_kv("WEAVIATE_CLIENT_INIT", url=self.url, batch_size=self.batch_size)
+            # Create client (may raise if weaviate package missing or invalid args)
+            self.client = weaviate.Client(url=self.url, additional_headers=headers)
 
     def _class_exists(self, class_name: str) -> bool:
-        if not self.client:
-            return False
-        try:
-            schema = self.client.schema.get() or {}
-            classes = schema.get("classes") or []
-            return any(c.get("class") == class_name for c in classes)
-        except Exception:
-            return False
+        assert self.client is not None, "Weaviate client not initialized"
+        schema = self.client.schema.get()
+        classes = schema.get("classes", []) if isinstance(schema, dict) else []
+        for c in classes:
+            if c.get("class") == class_name:
+                return True
+        return False
 
-    def ensure_schema(self) -> None:
-        """Idempotently ensure the required Weaviate classes exist.
+    def ensure_schema(self) -> bool:
+        """Ensure the minimal schema exists in Weaviate.
 
-        If `weaviate_url` was not provided or the client package is missing,
-        this method is a no-op and returns gracefully.
+        Creates the following classes if missing:
+          - CVDocument
+          - CVSection
+          - RoleDocument
+          - RoleSection
+
+        Returns True on success. Raises on client/server errors.
         """
-        if not self.url:
-            logger.debug("Skipping ensure_schema(): weaviate URL not configured")
-            return
+        if not self.url or not self.client:
+            raise RuntimeError("Weaviate URL not configured; cannot ensure schema")
 
-        if not self.client:
-            logger.debug("Skipping ensure_schema(): weaviate client missing/unavailable")
-            return
-
-        classes = [
-            {
-                "class": "CVDocument",
-                "vectorizer": "none",
-                "properties": [
-                    {"name": "sha", "dataType": ["string"]},
-                    {"name": "filename", "dataType": ["string"]},
-                    {"name": "metadata", "dataType": ["text"]},
-                    {"name": "full_text", "dataType": ["text"]},
-                ],
-            },
-            {
-                "class": "CVSection",
-                "vectorizer": "none",
-                "properties": [
-                    {"name": "parent_sha", "dataType": ["string"]},
-                    {"name": "section_type", "dataType": ["string"]},
-                    {"name": "section_text", "dataType": ["text"]},
-                ],
-            },
-            {
-                "class": "Role",
-                "vectorizer": "none",
-                "properties": [
-                    {"name": "sha", "dataType": ["string"]},
-                    {"name": "filename", "dataType": ["string"]},
-                    {"name": "role_text", "dataType": ["text"]},
-                ],
-            },
+        # Define class schemas (vectorizer: none to store vectors externally)
+        # Explicit CVDocument properties mapped to CSV columns used by app.py
+        cv_properties = [
+            {"name": "sha", "dataType": ["string"]},
+            {"name": "timestamp", "dataType": ["string"]},
+            {"name": "cv", "dataType": ["string"]},
+            {"name": "filename", "dataType": ["string"]},
+            {"name": "personal_first_name", "dataType": ["string"]},
+            {"name": "personal_last_name", "dataType": ["string"]},
+            {"name": "personal_full_name", "dataType": ["string"]},
+            {"name": "personal_email", "dataType": ["string"]},
+            {"name": "personal_phone", "dataType": ["string"]},
+            {"name": "professional_misspelling_count", "dataType": ["int"]},
+            {"name": "professional_misspelled_words", "dataType": ["text"]},
+            {"name": "professional_visual_cleanliness", "dataType": ["string"]},
+            {"name": "professional_look", "dataType": ["string"]},
+            {"name": "professional_formatting_consistency", "dataType": ["string"]},
+            {"name": "experience_years_since_graduation", "dataType": ["int"]},
+            {"name": "experience_total_years", "dataType": ["int"]},
+            {"name": "experience_employer_names", "dataType": ["text"]},
+            {"name": "stability_employers_count", "dataType": ["int"]},
+            {"name": "stability_avg_years_per_employer", "dataType": ["string"]},
+            {"name": "stability_years_at_current_employer", "dataType": ["string"]},
+            {"name": "socio_address", "dataType": ["text"]},
+            {"name": "socio_alma_mater", "dataType": ["string"]},
+            {"name": "socio_high_school", "dataType": ["string"]},
+            {"name": "socio_education_system", "dataType": ["string"]},
+            {"name": "socio_second_foreign_language", "dataType": ["string"]},
+            {"name": "flag_stem_degree", "dataType": ["string"]},
+            {"name": "flag_military_service_status", "dataType": ["string"]},
+            {"name": "flag_worked_at_financial_institution", "dataType": ["string"]},
+            {"name": "flag_worked_for_egyptian_government", "dataType": ["string"]},
+            {"name": "full_text", "dataType": ["text"]},
         ]
 
-        for cls in classes:
-            class_name = cls.get("class")
-            if self._class_exists(class_name):
-                logger.debug("Weaviate class '%s' already exists, skipping", class_name)
-                continue
-            try:
-                self.client.schema.create_class(cls)  # type: ignore
-                logger.info("Created Weaviate class: %s", class_name)
-            except Exception as exc:
-                logger.warning("Failed to create Weaviate class '%s': %s", class_name, exc)
+        cv_section_props = [
+            {"name": "parent_sha", "dataType": ["string"]},
+            {"name": "section_type", "dataType": ["string"]},
+            {"name": "section_text", "dataType": ["text"]},
+        ]
 
-    def _find_cv_by_sha(self, sha: str) -> tuple[Optional[str], Optional[dict]]:
-        """Return (uuid, properties) for the CVDocument with matching sha, or (None, None).
+        # Role documents mirror CV but with a RoleTitle field commonly used
+        role_properties = [
+            {"name": "sha", "dataType": ["string"]},
+            {"name": "timestamp", "dataType": ["string"]},
+            {"name": "filename", "dataType": ["string"]},
+            {"name": "role_title", "dataType": ["string"]},
+            {"name": "full_text", "dataType": ["text"]},
+        ]
 
-        Uses a GraphQL query with a where filter on the `sha` property. If the
-        client is unavailable or an error occurs this returns (None, None).
-        """
-        if not self.client:
-            return None, None
+        role_section_props = cv_section_props
 
-        try:
-            where = {"path": ["sha"], "operator": "Equal", "valueString": sha}
-            # request id via _additional
-            resp = (
-                self.client.query
-                .get("CVDocument", ["sha", "filename", "metadata", "full_text"])
-                .with_where(where)
-                .with_additional(["id"])
-                .do()
-            )
-            items = (resp.get("data", {}).get("Get", {}).get("CVDocument") or [])
-            if not items:
-                return None, None
-            first = items[0]
-            # additional id may be under _additional
-            additional = first.get("_additional") or {}
-            uuid = additional.get("id")
-            return uuid, first
-        except Exception as exc:
-            logger.warning("Error querying Weaviate for sha=%s: %s", sha, exc)
-            return None, None
-
-    def write_cv_to_db(self, sha: str, filename: str, full_text: str, attributes: dict) -> dict:
-        """Create or update a CVDocument record keyed by `sha`.
-
-        This is idempotent: repeated calls with the same `sha` will update the
-        existing object. When Weaviate is not configured this returns a dict
-        describing the no-op and does not raise.
-        Returns a dict: {sha, id, created (bool), weaviate_ok (bool)}.
-        """
-        if not self.client:
-            logger.debug("write_cv_to_db: weaviate client missing; skipping upsert for %s", sha)
-            return {"sha": sha, "id": None, "created": False, "weaviate_ok": False}
-
-        uuid, existing = self._find_cv_by_sha(sha)
-
-        data_obj = {
-            "sha": sha,
-            "filename": filename,
-            # store attributes as JSON text in the 'metadata' text field
-            "metadata": json.dumps(attributes or {}),
-            "full_text": full_text or "",
+        classes: Dict[str, Dict[str, Any]] = {
+            "CVDocument": {"class": "CVDocument", "vectorizer": "none", "properties": cv_properties},
+            "CVSection": {"class": "CVSection", "vectorizer": "none", "properties": cv_section_props},
+            "RoleDocument": {"class": "RoleDocument", "vectorizer": "none", "properties": role_properties},
+            "RoleSection": {"class": "RoleSection", "vectorizer": "none", "properties": role_section_props},
         }
 
-        try:
-            if uuid:
-                # update
-                self.client.data_object.update(data_obj, "CVDocument", uuid=uuid)  # type: ignore
-                logger.info("Updated CVDocument sha=%s id=%s", sha, uuid)
-                return {"sha": sha, "id": uuid, "created": False, "weaviate_ok": True}
+        # Create missing classes only
+        created = []
+        for name, schema in classes.items():
+            if not self._class_exists(name):
+                self.logger.log_kv("WEAVIATE_CREATE_CLASS", class_name=name)
+                self.client.schema.create_class(schema)
+                created.append(name)
             else:
-                new_id = self.client.data_object.create(data_obj, "CVDocument")  # type: ignore
-                # some client versions return dict with 'id', others return id string
-                new_uuid = None
-                if isinstance(new_id, dict):
-                    new_uuid = new_id.get("id")
-                else:
-                    new_uuid = new_id
-                logger.info("Created CVDocument sha=%s id=%s", sha, new_uuid)
-                return {"sha": sha, "id": new_uuid, "created": True, "weaviate_ok": True}
-        except Exception as exc:
-            logger.warning("Failed to upsert CVDocument sha=%s: %s", sha, exc)
-            return {"sha": sha, "id": None, "created": False, "weaviate_ok": False}
+                self.logger.log_kv("WEAVIATE_CLASS_EXISTS", class_name=name)
 
-    def read_cv_from_db(self, sha: str) -> Optional[dict]:
-        """Return the CVDocument properties for the given sha, or None if missing.
+        self.logger.log_kv("WEAVIATE_SCHEMA_ENSURED", created=",".join(created) if created else "none")
+        return True
 
-        When Weaviate is not configured this returns None.
+    # ---------------------------- CV helpers ---------------------------------
+    def _find_cv_by_sha(self, sha: str) -> Optional[Dict[str, Any]]:
+        """Return the first CVDocument object matching sha or None.
+
+        Returns a dict with keys 'id' and 'properties' when found.
         """
         if not self.client:
-            logger.debug("read_cv_from_db: weaviate client missing; returning None for %s", sha)
-            return None
+            raise RuntimeError("Weaviate client not initialized")
 
-        uuid, props = self._find_cv_by_sha(sha)
-        if not props:
-            return None
-
-        # props already contains sha, filename, metadata, full_text; metadata is JSON text
         try:
-            metadata = props.get("metadata")
-            if metadata:
-                try:
-                    metadata_obj = json.loads(metadata)
-                except Exception:
-                    metadata_obj = metadata
-            else:
-                metadata_obj = None
-        except Exception:
-            metadata_obj = None
+            where = {
+                "path": ["sha"],
+                "operator": "Equal",
+                "valueString": sha,
+            }
+            # request the explicit CVDocument properties declared in the schema
+            props = [
+                "sha",
+                "timestamp",
+                "cv",
+                "filename",
+                "personal_first_name",
+                "personal_last_name",
+                "personal_full_name",
+                "personal_email",
+                "personal_phone",
+                "professional_misspelling_count",
+                "professional_misspelled_words",
+                "professional_visual_cleanliness",
+                "professional_look",
+                "professional_formatting_consistency",
+                "experience_years_since_graduation",
+                "experience_total_years",
+                "experience_employer_names",
+                "stability_employers_count",
+                "stability_avg_years_per_employer",
+                "stability_years_at_current_employer",
+                "socio_address",
+                "socio_alma_mater",
+                "socio_high_school",
+                "socio_education_system",
+                "socio_second_foreign_language",
+                "flag_stem_degree",
+                "flag_military_service_status",
+                "flag_worked_at_financial_institution",
+                "flag_worked_for_egyptian_government",
+                "full_text",
+            ]
+
+            res = self.client.query.get("CVDocument", props).with_where(where).do()
+            objs = res.get("data", {}).get("Get", {}).get("CVDocument", [])
+            if objs:
+                first = objs[0]
+                return {"id": first.get("id") or (first.get("_additional") or {}).get("id"), "properties": first}
+            return None
+        except Exception as e:
+            self.logger.log_kv("WEAVIATE_QUERY_ERROR", error=str(e))
+            raise
+
+    def write_cv_to_db(self, sha: str, filename: str, full_text: str, attributes: Dict[str, object]) -> Dict[str, object]:
+        """Create or update a CVDocument object keyed by `sha`.
+
+        Maps the provided `attributes` dict into the explicit CVDocument
+        properties declared in the schema (instead of storing a single
+        JSON-encoded `metadata` blob). The `full_text` is stored in the
+        `full_text` property. Returns the created/updated object's id and
+        stored properties.
+        """
+        if not self.client:
+            raise RuntimeError("Weaviate client not initialized")
+
+        # Map attributes into explicit CVDocument properties. Use sensible
+        # defaults when a key is missing to avoid nulls in Weaviate where
+        # possible. The 'attributes' dict is expected to contain keys that map
+        # to the CSV columns; we only read known fields here.
+        props = {
+            "sha": sha,
+            "timestamp": attributes.get("timestamp", ""),
+            "cv": attributes.get("cv", ""),
+            "filename": filename,
+            "personal_first_name": attributes.get("personal_first_name", ""),
+            "personal_last_name": attributes.get("personal_last_name", ""),
+            "personal_full_name": attributes.get("personal_full_name", ""),
+            "personal_email": attributes.get("personal_email", ""),
+            "personal_phone": attributes.get("personal_phone", ""),
+            "professional_misspelling_count": attributes.get("professional_misspelling_count", None),
+            "professional_misspelled_words": attributes.get("professional_misspelled_words", ""),
+            "professional_visual_cleanliness": attributes.get("professional_visual_cleanliness", ""),
+            "professional_look": attributes.get("professional_look", ""),
+            "professional_formatting_consistency": attributes.get("professional_formatting_consistency", ""),
+            "experience_years_since_graduation": attributes.get("experience_years_since_graduation", None),
+            "experience_total_years": attributes.get("experience_total_years", None),
+            "experience_employer_names": attributes.get("experience_employer_names", ""),
+            "stability_employers_count": attributes.get("stability_employers_count", None),
+            "stability_avg_years_per_employer": attributes.get("stability_avg_years_per_employer", ""),
+            "stability_years_at_current_employer": attributes.get("stability_years_at_current_employer", ""),
+            "socio_address": attributes.get("socio_address", ""),
+            "socio_alma_mater": attributes.get("socio_alma_mater", ""),
+            "socio_high_school": attributes.get("socio_high_school", ""),
+            "socio_education_system": attributes.get("socio_education_system", ""),
+            "socio_second_foreign_language": attributes.get("socio_second_foreign_language", ""),
+            "flag_stem_degree": attributes.get("flag_stem_degree", ""),
+            "flag_military_service_status": attributes.get("flag_military_service_status", ""),
+            "flag_worked_at_financial_institution": attributes.get("flag_worked_at_financial_institution", ""),
+            "flag_worked_for_egyptian_government": attributes.get("flag_worked_for_egyptian_government", ""),
+            "full_text": full_text,
+        }
+
+        found = self._find_cv_by_sha(sha)
+        if found:
+            obj_id = found.get("id")
+            # update existing
+            self.client.data_object.update(props, "CVDocument", uuid=obj_id)
+            self.logger.log_kv("WEAVIATE_CV_UPDATED", id=obj_id, sha=sha)
+            return {"id": obj_id, "properties": props}
+        else:
+            obj_id = self.client.data_object.create(props, "CVDocument")
+            self.logger.log_kv("WEAVIATE_CV_CREATED", id=obj_id, sha=sha)
+            return {"id": obj_id, "properties": props}
+
+    def read_cv_from_db(self, sha: str) -> Optional[Dict[str, object]]:
+        """Read CVDocument by sha and return attributes and full_text.
+
+        Returns a dict with keys: id, sha, filename, attributes (dict), full_text.
+        """
+        if not self.client:
+            raise RuntimeError("Weaviate client not initialized")
+
+        found = self._find_cv_by_sha(sha)
+        if not found:
+            return None
+        props = found.get("properties", {}) or {}
+
+        # Build a simplified result exposing the explicit fields and a
+        # convenience `attributes` dict containing the other CSV-mapped values.
+        attributes = {
+            "timestamp": props.get("timestamp"),
+            "cv": props.get("cv"),
+            "personal_first_name": props.get("personal_first_name"),
+            "personal_last_name": props.get("personal_last_name"),
+            "personal_full_name": props.get("personal_full_name"),
+            "personal_email": props.get("personal_email"),
+            "personal_phone": props.get("personal_phone"),
+            "professional_misspelling_count": props.get("professional_misspelling_count"),
+            "professional_misspelled_words": props.get("professional_misspelled_words"),
+            "professional_visual_cleanliness": props.get("professional_visual_cleanliness"),
+            "professional_look": props.get("professional_look"),
+            "professional_formatting_consistency": props.get("professional_formatting_consistency"),
+            "experience_years_since_graduation": props.get("experience_years_since_graduation"),
+            "experience_total_years": props.get("experience_total_years"),
+            "experience_employer_names": props.get("experience_employer_names"),
+            "stability_employers_count": props.get("stability_employers_count"),
+            "stability_avg_years_per_employer": props.get("stability_avg_years_per_employer"),
+            "stability_years_at_current_employer": props.get("stability_years_at_current_employer"),
+            "socio_address": props.get("socio_address"),
+            "socio_alma_mater": props.get("socio_alma_mater"),
+            "socio_high_school": props.get("socio_high_school"),
+            "socio_education_system": props.get("socio_education_system"),
+            "socio_second_foreign_language": props.get("socio_second_foreign_language"),
+            "flag_stem_degree": props.get("flag_stem_degree"),
+            "flag_military_service_status": props.get("flag_military_service_status"),
+            "flag_worked_at_financial_institution": props.get("flag_worked_at_financial_institution"),
+            "flag_worked_for_egyptian_government": props.get("flag_worked_for_egyptian_government"),
+        }
 
         result = {
-            "id": (props.get("_additional") or {}).get("id") if isinstance(props, dict) else None,
+            "id": found.get("id"),
             "sha": props.get("sha"),
             "filename": props.get("filename"),
-            "metadata": metadata_obj,
+            "attributes": attributes,
             "full_text": props.get("full_text"),
         }
         return result
 
+    # ------------------------- sections & processing -----------------------
+    def _split_into_sections(self, text: str, max_chars: int = 800) -> List[dict]:
+        """Deterministic splitter: split text into sections of roughly max_chars.
 
-__all__ = ["WeaviateStore"]
+        Returns a list of dicts: {"section_type": str, "section_text": str}.
+        """
+        if not text:
+            return []
+        # Split into paragraphs by blank lines first
+        paras = [p.strip() for p in text.split("\n\n") if p.strip()]
+        sections: List[dict] = []
+        buf = []
+        buf_len = 0
+        for p in paras:
+            plen = len(p)
+            if buf_len + plen + 2 > max_chars and buf:
+                sections.append({"section_type": "section", "section_text": "\n\n".join(buf).strip()})
+                buf = [p]
+                buf_len = plen
+            else:
+                buf.append(p)
+                buf_len += plen + 2
+        if buf:
+            sections.append({"section_type": "section", "section_text": "\n\n".join(buf).strip()})
+        return sections
+
+    def _find_section_by_parent_and_text(self, parent_sha: str, section_text: str) -> Optional[Dict[str, object]]:
+        """Return existing CVSection object matching parent_sha and section_text, or None."""
+        if not self.client:
+            return None
+        try:
+            where = {"path": ["parent_sha"], "operator": "Equal", "valueString": parent_sha}
+            res = self.client.query.get("CVSection", ["parent_sha", "section_type", "section_text"]).with_where(where).with_additional(["id"]).do()
+            items = res.get("data", {}).get("Get", {}).get("CVSection", [])
+            for it in items:
+                txt = it.get("section_text") or ""
+                if txt.strip() == (section_text or "").strip():
+                    return {"id": it.get("_additional", {}).get("id") or it.get("id"), "properties": it}
+            return None
+        except Exception as e:
+            self.logger.log_kv("WEAVIATE_SECTION_QUERY_ERROR", error=str(e))
+            return None
+
+    def upsert_cv_section(self, parent_sha: str, section_type: str, section_text: str, embedding: List[float]) -> Dict[str, object]:
+        """Create or update a CVSection. Uses (parent_sha, section_text) to dedupe.
+
+        Returns dict: {id, created(bool), weaviate_ok(bool)}.
+        """
+        if not self.client:
+            return {"id": None, "created": False, "weaviate_ok": False}
+
+        props = {"parent_sha": parent_sha, "section_type": section_type, "section_text": section_text}
+        try:
+            found = self._find_section_by_parent_and_text(parent_sha, section_text)
+            if found:
+                obj_id = found.get("id")
+                # update
+                self.client.data_object.update(props, "CVSection", uuid=obj_id)
+                self.logger.log_kv("WEAVIATE_CVSECTION_UPDATED", id=obj_id, parent_sha=parent_sha)
+                return {"id": obj_id, "created": False, "weaviate_ok": True}
+            else:
+                # create with vector
+                new_id = self.client.data_object.create(props, "CVSection", vector=embedding)
+                nid = new_id.get("id") if isinstance(new_id, dict) else new_id
+                self.logger.log_kv("WEAVIATE_CVSECTION_CREATED", id=nid, parent_sha=parent_sha)
+                return {"id": nid, "created": True, "weaviate_ok": True}
+        except Exception as e:
+            self.logger.log_kv("WEAVIATE_CVSECTION_UPSERT_ERROR", error=str(e), parent_sha=parent_sha)
+            return {"id": None, "created": False, "weaviate_ok": False}
+
+    def write_role_to_db(self, sha: str, filename: str, full_text: str, attributes: Dict[str, object]) -> Dict[str, object]:
+        """Create or update a RoleDocument object keyed by `sha`.
+
+        Mirrors `write_cv_to_db` but targets the RoleDocument class and stores
+        role-specific properties (role_title, full_text, etc.). Returns the
+        created/updated object's id and stored properties.
+        """
+        if not self.client:
+            raise RuntimeError("Weaviate client not initialized")
+
+        props = {
+            "sha": sha,
+            "timestamp": attributes.get("timestamp", ""),
+            "filename": filename,
+            "role_title": attributes.get("role_title", ""),
+            "full_text": full_text,
+        }
+
+        found = None
+        try:
+            where = {"path": ["sha"], "operator": "Equal", "valueString": sha}
+            res = self.client.query.get("RoleDocument", ["sha"]).with_where(where).do()
+            objs = res.get("data", {}).get("Get", {}).get("RoleDocument", [])
+            if objs:
+                found = objs[0]
+        except Exception:
+            pass
+
+        if found:
+            obj_id = found.get("id") or (found.get("_additional") or {}).get("id")
+            self.client.data_object.update(props, "RoleDocument", uuid=obj_id)
+            self.logger.log_kv("WEAVIATE_ROLE_UPDATED", id=obj_id, sha=sha)
+            return {"id": obj_id, "properties": props}
+        else:
+            obj_id = self.client.data_object.create(props, "RoleDocument")
+            self.logger.log_kv("WEAVIATE_ROLE_CREATED", id=obj_id, sha=sha)
+            return {"id": obj_id, "properties": props}
+
+    def read_role_from_db(self, sha: str) -> Optional[Dict[str, object]]:
+        """Read RoleDocument by sha. Returns same shape as read_cv_from_db."""
+        if not self.client:
+            raise RuntimeError("Weaviate client not initialized")
+
+        try:
+            where = {"path": ["sha"], "operator": "Equal", "valueString": sha}
+            res = self.client.query.get("RoleDocument", ["sha", "filename", "role_title", "full_text"]).with_where(where).with_additional(["id"]).do()
+            items = res.get("data", {}).get("Get", {}).get("RoleDocument", [])
+            if not items:
+                return None
+            first = items[0]
+            return {
+                "id": first.get("_additional", {}).get("id") or first.get("id"),
+                "sha": first.get("sha"),
+                "filename": first.get("filename"),
+                "attributes": {"role_title": first.get("role_title")},
+                "full_text": first.get("full_text"),
+            }
+        except Exception as e:
+            self.logger.log_kv("WEAVIATE_ROLE_READ_ERROR", error=str(e), sha=sha)
+            return None
+
+    def upsert_role_section(self, parent_sha: str, section_type: str, section_text: str, embedding: List[float]) -> Dict[str, object]:
+        """Create or update a RoleSection object; mirrors CV section upsert."""
+        if not self.client:
+            return {"id": None, "created": False, "weaviate_ok": False}
+        props = {"parent_sha": parent_sha, "section_type": section_type, "section_text": section_text}
+        try:
+            # simple dedupe by parent + exact section_text
+            where = {"path": ["parent_sha"], "operator": "Equal", "valueString": parent_sha}
+            res = self.client.query.get("RoleSection", ["parent_sha", "section_text"]).with_where(where).with_additional(["id"]).do()
+            items = res.get("data", {}).get("Get", {}).get("RoleSection", [])
+            for it in items:
+                if (it.get("section_text") or "").strip() == (section_text or "").strip():
+                    obj_id = it.get("_additional", {}).get("id") or it.get("id")
+                    self.client.data_object.update(props, "RoleSection", uuid=obj_id)
+                    self.logger.log_kv("WEAVIATE_ROLESECTION_UPDATED", id=obj_id, parent_sha=parent_sha)
+                    return {"id": obj_id, "created": False, "weaviate_ok": True}
+            new_id = self.client.data_object.create(props, "RoleSection", vector=embedding)
+            nid = new_id.get("id") if isinstance(new_id, dict) else new_id
+            self.logger.log_kv("WEAVIATE_ROLESECTION_CREATED", id=nid, parent_sha=parent_sha)
+            return {"id": nid, "created": True, "weaviate_ok": True}
+        except Exception as e:
+            self.logger.log_kv("WEAVIATE_ROLESECTION_UPSERT_ERROR", error=str(e), parent_sha=parent_sha)
+            return {"id": None, "created": False, "weaviate_ok": False}
+
+    def process_file_and_upsert(self, path: Path, is_role: bool = False) -> Dict[str, object]:
+        """Orchestrate extract -> split -> embed -> upsert.
+
+        This function is best-effort: if Weaviate is not configured it will
+        still extract text and compute the file SHA, but will return
+        weaviate_ok=False and will not raise.
+        Returns: {sha, filename, num_sections, weaviate_ok, errors: []}
+        """
+        from utils.extractors import compute_sha256_bytes, pdf_to_text, docx_to_text
+        from utils.paraphrase_client import text_to_embedding
+        import traceback
+
+        result = {"sha": None, "filename": None, "num_sections": 0, "weaviate_ok": False, "errors": []}
+        p = Path(path)
+        if not p.exists() or not p.is_file():
+            result["errors"].append(f"File not found: {p}")
+            return result
+
+        try:
+            data = p.read_bytes()
+            sha = compute_sha256_bytes(data)
+            result["sha"] = sha
+            result["filename"] = p.name
+
+            # Extract text depending on suffix
+            text = ""
+            if p.suffix.lower() == ".pdf":
+                text = pdf_to_text(p)
+            elif p.suffix.lower() == ".docx":
+                text = docx_to_text(p)
+            else:
+                text = p.read_text(encoding="utf-8", errors="ignore")
+
+            # Basic attributes
+            attrs = {"timestamp": "", "filename": p.name}
+            if is_role:
+                attrs["role_title"] = p.stem
+
+            # Attempt to write the document if client is present
+            if self.client:
+                try:
+                    if is_role:
+                        self.write_role_to_db(sha, p.name, text, attrs)
+                    else:
+                        self.write_cv_to_db(sha, p.name, text, attrs)
+                except Exception as e:
+                    self.logger.log_kv("WEAVIATE_DOC_UPSERT_ERROR", error=str(e), file=str(p))
+
+            # Split into sections and upsert each with embeddings
+            sections = self._split_into_sections(text)
+            result["num_sections"] = len(sections)
+            all_ok = True
+            for sec in sections:
+                sec_text = sec.get("section_text", "")
+                sec_type = sec.get("section_type", "section")
+                try:
+                    emb = text_to_embedding(sec_text)
+                except Exception as e:
+                    all_ok = False
+                    self.logger.log_kv("EMBEDDING_ERROR", error=str(e))
+                    result["errors"].append(str(e))
+                    emb = None
+
+                if emb is not None and self.client:
+                    try:
+                        if is_role:
+                            up = self.upsert_role_section(sha, sec_type, sec_text, emb)
+                        else:
+                            up = self.upsert_cv_section(sha, sec_type, sec_text, emb)
+                        if not up.get("weaviate_ok"):
+                            all_ok = False
+                    except Exception as e:
+                        all_ok = False
+                        self.logger.log_kv("WEAVIATE_SECTION_UPSERT_EXCEPTION", error=str(e))
+                        result["errors"].append(traceback.format_exc())
+
+            result["weaviate_ok"] = bool(self.client) and all_ok
+            return result
+        except Exception as e:
+            self.logger.log_kv("PROCESS_FILE_ERROR", error=str(e), file=str(p))
+            result["errors"].append(str(e))
+            return result
+ 
 

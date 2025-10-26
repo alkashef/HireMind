@@ -46,7 +46,6 @@
 - **After each code edit or ask, update:
   - `requirements.txt` if new libraries are used, versions changed, or libraries removed. 
   - `README.md` if new features or significant changes are introduced. Include how to setup and test. 
-- Frequently persist your internal todo list to `TODO.md` after making or completing tasks so the project state stays in sync.
 
 ## Communication
 - Avoid repetition of instructions or disclaimers.

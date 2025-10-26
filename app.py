@@ -512,6 +512,44 @@ def api_extract_progress():
         return jsonify({"active": False, "total": 0, "done": 0, "start": None})
 
 
+@app.route("/api/weaviate/cv/<sha>")
+def api_weaviate_cv_read(sha: str):
+    """Read-only endpoint to fetch CV data by sha from Weaviate (safe).
+
+    Returns 503 when Weaviate is not configured, 404 when object missing, or
+    200 with JSON body when found.
+    """
+    try:
+        from utils.weaviate_store import WeaviateStore
+        ws = WeaviateStore()
+        if not ws.client:
+            return jsonify({"error": "Weaviate not configured"}), 503
+        obj = ws.read_cv_from_db(sha)
+        if not obj:
+            return jsonify({"error": "Not found"}), 404
+        return jsonify(obj)
+    except Exception as e:
+        log_kv("WEAVIATE_CV_READ_ERROR", error=str(e), sha=sha)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/weaviate/role/<sha>")
+def api_weaviate_role_read(sha: str):
+    """Read-only endpoint to fetch Role data by sha from Weaviate (safe)."""
+    try:
+        from utils.weaviate_store import WeaviateStore
+        ws = WeaviateStore()
+        if not ws.client:
+            return jsonify({"error": "Weaviate not configured"}), 503
+        obj = ws.read_role_from_db(sha)
+        if not obj:
+            return jsonify({"error": "Not found"}), 404
+        return jsonify(obj)
+    except Exception as e:
+        log_kv("WEAVIATE_ROLE_READ_ERROR", error=str(e), sha=sha)
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     # Log application launch with OpenAI SDK diagnostics
     try:
