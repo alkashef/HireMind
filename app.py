@@ -31,33 +31,88 @@ ROLES_EXTRACT_PROGRESS: dict = {"active": False, "total": 0, "done": 0, "start":
 
 
 def log(message: str) -> None:
-    logger.log(message)
+        """Log a simple message to the application log file.
+
+        This is a thin convenience wrapper around the project-wide ``AppLogger``
+        instance configured in this module. Use this for short, human-readable
+        event messages that don't need structured key/value fields.
+
+        Parameters
+        - message: Short text message to append to the log file. The logger will
+            prefix the message with a timestamp.
+        """
+        logger.log(message)
 
 
 def log_kv(event: str, **fields: object) -> None:
-    logger.log_kv(event, **fields)
+        """Log a structured event with key/value pairs.
+
+        The event name is a short identifier (e.g. "EXTRACT_POST_DONE") and
+        additional keyword arguments are formatted by the logger into a single
+        line. This is meant for machine-readable telemetry stored alongside
+        human messages in the same log file.
+
+        Parameters
+        - event: Short event name
+        - **fields: Arbitrary key/value pairs that will be rendered as
+            ``k=v`` tokens in the log line.
+        """
+        logger.log_kv(event, **fields)
 
 
 # Log once when the app handles the first request (Flask 3.x safe)
 @app.before_request
 def _app_ready() -> None:
+    """Mark the Flask app as ready once and emit a startup log event.
+
+    This handler runs before the first request and logs a single ``APP_READY``
+    event. It stores a process-local flag in ``app.config`` to avoid
+    repeated logs across subsequent requests.
+    """
     if not app.config.get("_APP_READY_LOGGED"):
         log("APP_READY")
         app.config["_APP_READY_LOGGED"] = True
 
 
 def get_default_folder() -> str:
+    """Return the configured default folder for applicant documents.
+
+    The value is read from `AppConfig().default_folder` which falls back to
+    the user's home directory when not explicitly set via environment.
+    """
     return config.default_folder
 
 def get_roles_default_folder() -> str:
+    """Return the configured default folder for role documents.
+
+    Falls back to the configured applicants folder when a separate roles
+    folder is not set.
+    """
     return config.roles_folder
 
 
 def get_data_path() -> Path:
+    """Return the project's data directory as a :class:`pathlib.Path`.
+
+    This convenience function delegates to ``AppConfig.data_path`` which
+    ensures the directory exists before returning it.
+    """
     return config.data_path
 
 
 def list_docs(folder: str) -> List[str]:
+    """Return a sorted list of document file paths for a folder.
+
+    Only files with extensions in the allowed set (currently ``.pdf`` and
+    ``.docx``) are returned. The function ignores subdirectories and
+    non-file entries.
+
+    Parameters
+    - folder: Path to search (string); may be absolute or relative.
+
+    Returns
+    - Sorted list of matching file paths as strings.
+    """
     exts = {".pdf", ".docx"}
     p = Path(folder)
     if not p.exists() or not p.is_dir():
@@ -66,12 +121,28 @@ def list_docs(folder: str) -> List[str]:
     return sorted(paths)
 
 def list_role_docs(folder: str) -> List[str]:
-    """List role documents (same extensions as CVs)."""
+    """List role documents in `folder`.
+
+    This is a thin alias around :func:`list_docs` but exists for clarity in
+    the roles-related routes and to allow future divergence if role file
+    handling requires special casing.
+    """
     return list_docs(folder)
 
 
 def sha256_file(path: Path) -> str:
-    """Return hex sha256 of a file's content."""
+    """Compute the lowercase hex SHA-256 digest of a file's bytes.
+
+    Parameters
+    - path: :class:`pathlib.Path` pointing to an existing file.
+
+    Returns
+    - 64-character lowercase hex string representing SHA-256(file_bytes).
+
+    Notes
+    - The function reads the file in 1MB chunks to avoid using excessive
+      memory for large files.
+    """
     h = hashlib.sha256()
     with path.open("rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -80,10 +151,16 @@ def sha256_file(path: Path) -> str:
 
 
 def get_max_file_mb() -> int:
+    """Return maximum allowed file size in megabytes from config."""
     return config.max_file_mb
 
 
 def get_openai_model() -> str:
+    """Return the configured OpenAI model identifier from AppConfig.
+
+    This is a convenience wrapper used by parts of the app that need the
+    model name without importing AppConfig directly.
+    """
     return config.openai_model
 
 # OpenAI integration has been moved to utils/openai_manager.OpenAIManager
