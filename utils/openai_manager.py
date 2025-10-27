@@ -1,5 +1,22 @@
 from __future__ import annotations
 
+"""OpenAI integration helpers.
+
+This module provides a small helper class, :class:`OpenAIManager`, which
+encapsulates calls to the OpenAI Responses API using the official SDK when
+available and falling back to raw HTTP requests when necessary.
+
+Primary responsibility:
+- Upload a file to the OpenAI file API
+- Create a temporary vector store and attach the file
+- Call the Responses API (or HTTP fallback) with system/user prompts
+- Parse the JSON object response and return structured data or an error
+
+The implementation is defensive and returns (data, error) where `error` is
+an error string when something failed. Callers can handle the error and
+decide whether to proceed.
+"""
+
 import json
 from pathlib import Path
 from typing import Tuple, Dict, Any
@@ -12,7 +29,18 @@ from utils.logger import AppLogger
 
 
 class OpenAIManager:
-    """Encapsulates OpenAI Responses API integration (SDK + HTTP fallback)."""
+    """Encapsulates OpenAI Responses API integration (SDK + HTTP fallback).
+
+    Responsibilities
+    - Use the modern OpenAI SDK (`OpenAI`) when it provides the Responses API.
+    - Fall back to HTTP+requests when the SDK is unavailable or lacks responses.
+    - Upload files, create temporary vector stores, attach files, and call
+      the Responses API asking for a JSON-object formatted output.
+
+    The class returns tuples of ``(data_dict | None, error_str | None)`` so
+    callers can handle failures without raising exceptions for expected
+    runtime issues (missing API key, network failures, etc.).
+    """
 
     def __init__(self, config: AppConfig, logger: AppLogger) -> None:
         self.config = config
@@ -23,12 +51,23 @@ class OpenAIManager:
         #   - Keep a persistent store id (e.g., self._vs_id) created on first use
         #   - Attach each uploaded file to that store
         #   - Delete the store only on app shutdown/teardown (or rotate after N files)
-    # Consideration: Retrieval contamination across files; mitigate with strict
-    # prompts and passing the current CV via input_file, or rotate per batch.
+        # Consideration: Retrieval contamination across files; mitigate with strict
+        # prompts and passing the current CV via input_file, or rotate per batch.
         self._vs_id: str | None = None  # SDK-managed vector store id (future reuse)
         self._vs_id_http: str | None = None  # HTTP fallback vector store id (future reuse)
 
     def _load_prompt(self, name: str) -> str:
+        """Load a prompt template from the repository `prompts/` folder.
+
+        Parameters
+        - name: Filename inside `prompts/` (e.g. 'extract_from_cv_user.md')
+
+        Returns
+        - Contents of the prompt file as a stripped string.
+
+        Raises
+        - RuntimeError when the prompt file cannot be read.
+        """
         # prompts/ is at repo root; this file is utils/openai_manager.py
         root = Path(__file__).resolve().parent.parent
         p = root / "prompts" / name
@@ -38,6 +77,26 @@ class OpenAIManager:
             raise RuntimeError(f"Prompt load failed: {name} -> {e}")
 
     def extract_full_name(self, file_path: Path) -> Tuple[Dict[str, Any] | None, str | None]:
+        """Extract a structured JSON object (profile) from a file using OpenAI.
+
+        This method attempts the following flow:
+        1. Ensure OPENAI_API_KEY is present in config
+        2. Upload the file to the OpenAI files API
+        3. Create a temporary vector store and attach the file
+        4. Call the Responses API (SDK or HTTP fallback) with system/user prompts
+           requesting a JSON object as the output format
+        5. Parse and return the JSON object
+
+        Returns
+        - (data_dict, None) on success where data_dict is the parsed JSON object
+        - (None, error_message) on failure with an actionable string
+
+        Notes
+        - The method cleans up temporary vector stores after use. It is
+          intentionally conservative and prefers returning an error string
+          rather than raising for common runtime issues (missing API key,
+          network errors, etc.).
+        """
         try:
             api_key = self.config.openai_api_key
             if not api_key:

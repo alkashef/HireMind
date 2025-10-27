@@ -287,6 +287,10 @@ scripts\stop_weaviate.bat  # stops and removes the compose stack
 
 Run them from a cmd.exe prompt in the repository root. They wrap the `docker compose` commands and print status/errors to make local dev easier.
 
+Note about env sourcing
+
+The `scripts\run_weaviate.bat` helper will source environment variables from `config/.env` before launching Weaviate. It parses simple `KEY=VALUE` lines (skips comments and blank lines), handles optional `export ` prefixes and quoted values, and sets them into the script process so `docker compose` picks up the same configuration used by the app. This makes it convenient to run Weaviate with the same `WEAVIATE_*` and `WEAVIATE_DATA_PATH` settings defined for local development.
+
 Environment variable: WEAVIATE_DATA_PATH
 
 You can override where Weaviate persists its data on the host by setting `WEAVIATE_DATA_PATH` in `config/.env` or your environment. By default the project uses `data/weaviate_data`. If you set this variable, update the compose/run commands to mount that path.
