@@ -28,6 +28,54 @@ import os
 import sys
 import urllib.request
 import urllib.error
+from pathlib import Path
+
+
+def _load_weaviate_env_from_file() -> None:
+    """Load WEAVIATE_* environment variables from config/.env into os.environ.
+
+    Behavior:
+    - Looks for the file at <repo_root>/config/.env (repo root is two levels up from this test file).
+    - Parses simple KEY=VALUE lines, skips blank lines and lines starting with '#' or ';'.
+    - Handles optional leading 'export ' on the key and strips surrounding double-quotes from values.
+    - Only sets variables whose key starts with 'WEAVIATE_' to avoid clobbering unrelated env vars.
+    - Does not override variables already present in the environment (existing env wins).
+    """
+    try:
+        repo_root = Path(__file__).resolve().parent.parent
+        env_path = repo_root / "config" / ".env"
+        if not env_path.exists():
+            return
+        loaded = 0
+        for raw in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or line.startswith(";"):
+                continue
+            # Optional leading 'export '
+            if line.lower().startswith("export "):
+                line = line[7:]
+            if "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip()
+            # strip optional surrounding quotes
+            if len(v) >= 2 and v[0] == '"' and v[-1] == '"':
+                v = v[1:-1]
+            # Only import WEAVIATE_ prefixed variables to avoid side-effects
+            if not k.startswith("WEAVIATE_"):
+                continue
+            if k not in os.environ:
+                os.environ[k] = v
+                loaded += 1
+        if loaded:
+            print(f"Loaded {loaded} WEAVIATE_* variables from {env_path}")
+    except Exception as e:
+        print("Failed to load env file for weaviate vars:", repr(e))
+
+
+# Load WEAVIATE_* variables from config/.env (if present) before running probes
+_load_weaviate_env_from_file()
 
 
 def get_target_url() -> str | None:
