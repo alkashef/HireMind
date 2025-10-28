@@ -159,8 +159,17 @@ def test_hermes_fp16_and_4bit():
                     )
 
                     # Provide a conservative max_memory hint for the auto device mapper.
-                    # Adjust 'cuda:0' down if you know available VRAM is lower.
-                    max_memory = {"cuda:0": "6GB", "cpu": "90GB"}
+                    # We'll attempt to infer available GPU memory and leave ~1GB headroom
+                    # so machines with 8GB VRAM use ~7GB, if available.
+                    try:
+                        # torch is already imported above; get device total memory in GB
+                        total_bytes = torch.cuda.get_device_properties(0).total_memory
+                        total_gb = int(total_bytes // (1024 ** 3))
+                        cuda_hint_gb = max(total_gb - 1, 2)
+                        max_memory = {"cuda:0": f"{cuda_hint_gb}GB", "cpu": "90GB"}
+                    except Exception:
+                        # Fallback conservative hint
+                        max_memory = {"cuda:0": "6GB", "cpu": "90GB"}
 
                     model2 = AutoModelForCausalLM.from_pretrained(
                         str(HERMES_MODEL_DIR),
@@ -170,13 +179,42 @@ def test_hermes_fp16_and_4bit():
                         trust_remote_code=False,
                     )
                 except Exception as exc2:
-                    # If offload attempt also fails, skip the 4-bit test since hardware can't support it
+                    # If offload attempt also fails, print diagnostics and skip the 4-bit test since hardware can't support it
+                    try:
+                        print("DEBUG: attempted max_memory:", max_memory)
+                    except Exception:
+                        print("DEBUG: max_memory not set")
+                    try:
+                        print("DEBUG: original load exception:", load_exc)
+                    except Exception:
+                        pass
+                    print("DEBUG: offload exception:", exc2)
                     pytest.skip(f"Skipping 4-bit Hermes check: failed to load with offload: {exc2}")
             else:
                 raise RuntimeError(f"Failed to load model in 4-bit on CUDA: {load_exc}")
 
-        # If model loaded but no params placed on CUDA, skip the 4-bit test (insufficient VRAM)
+        # If model loaded but no params placed on CUDA, print diagnostics and skip the 4-bit test
         if not _any_param_on_cuda(model2):
+            # Diagnostics to help tune max_memory or build a manual device_map
+            try:
+                print("DEBUG: computed max_memory hint:", max_memory)
+            except Exception:
+                print("DEBUG: max_memory not available")
+            try:
+                devmap = getattr(model2, "hf_device_map", None)
+                print("DEBUG: model.hf_device_map:", devmap)
+            except Exception as _:
+                print("DEBUG: failed to read model.hf_device_map")
+            try:
+                total = 0
+                cuda_cnt = 0
+                for p in model2.parameters():
+                    total += int(p.numel())
+                    if getattr(p, "device", None) is not None and getattr(p.device, "type", None) == "cuda":
+                        cuda_cnt += int(p.numel())
+                print(f"DEBUG: params total={total}, on_cuda={cuda_cnt}, on_cpu={total-cuda_cnt}")
+            except Exception:
+                print("DEBUG: failed to count params on devices")
             pytest.skip("4-bit model loaded but no parameters placed on CUDA (insufficient GPU RAM); skipping 4-bit checks")
 
         prompt_path2 = PROJECT_ROOT / "prompts" / "prompt_numeric_2_plus_2.md"
