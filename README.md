@@ -122,6 +122,52 @@ python scripts\download_nous-hermes.py
 Set `HF_HUB_OFFLINE=1` (or `set HF_HUB_OFFLINE=1` on Windows) to force
 offline usage of cached Hugging Face files once downloaded.
 
+### Quick GPU env setup and test (Windows cmd)
+
+If you want a minimal, repeatable sequence to get a CUDA-enabled dev env and run the Hermes smoke test, follow these steps on Windows (cmd.exe). This lists the essential steps we use during development and CI validation.
+
+1) Install NVIDIA drivers
+
+    - Download and install the latest NVIDIA driver for your GPU from https://www.nvidia.com/Download/index.aspx. Reboot if prompted.
+    - Verify drivers are installed with:
+
+```cmd
+nvidia-smi
+```
+
+2) Install CUDA toolkit (matching recommended runtime)
+
+    - Install the CUDA toolkit that matches the project's recommended runtime (CUDA 12.6 / cu126) from https://developer.nvidia.com/cuda-toolkit. Follow NVIDIA's installer instructions for Windows.
+    - After install, verify with `nvidia-smi` and by checking `torch` once installed (see step 4).
+
+3) Create and activate the Conda environment
+
+```cmd
+conda create --name hiremind python=3.11 -y
+conda activate hiremind
+```
+
+4) Install Python dependencies
+
+```cmd
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+5) Run the Hermes smoke test (FP16 + optional 4-bit)
+
+```cmd
+# run the single Hermes smoke test (fast, focused)
+pytest -q tests/test_hermes_local.py
+
+# or run directly with python (useful for quick manual runs)
+python tests/test_hermes_local.py
+```
+
+Notes:
+- If your GPU has limited VRAM (e.g., ~8GB), the 4-bit (BitsAndBytes) load may be skipped by the test — FP16 is still validated. The test contains a fallback that attempts CPU offload for 4-bit quantization and will `skip` if the local hardware cannot place parameters on CUDA.
+- If you need reliable 4-bit testing, run on a machine with more GPU RAM or use a cloud VM with a larger GPU.
+
 #### Data and CSV
 
 - The CSV pipeline (`data/applicants.csv`, `data/roles.csv`) remains the
