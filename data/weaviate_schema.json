@@ -1,0 +1,69 @@
+{
+  "classes": {
+    "CVDocument": {
+      "class": "CVDocument",
+      "vectorizer": "none",
+      "properties": [
+        {"name": "sha", "dataType": ["string"]},
+        {"name": "timestamp", "dataType": ["string"]},
+        {"name": "cv", "dataType": ["string"]},
+        {"name": "filename", "dataType": ["string"]},
+        {"name": "personal_first_name", "dataType": ["string"]},
+        {"name": "personal_last_name", "dataType": ["string"]},
+        {"name": "personal_full_name", "dataType": ["string"]},
+        {"name": "personal_email", "dataType": ["string"]},
+        {"name": "personal_phone", "dataType": ["string"]},
+        {"name": "professional_misspelling_count", "dataType": ["int"]},
+        {"name": "professional_misspelled_words", "dataType": ["text"]},
+        {"name": "professional_visual_cleanliness", "dataType": ["string"]},
+        {"name": "professional_look", "dataType": ["string"]},
+        {"name": "professional_formatting_consistency", "dataType": ["string"]},
+        {"name": "experience_years_since_graduation", "dataType": ["int"]},
+        {"name": "experience_total_years", "dataType": ["int"]},
+        {"name": "experience_employer_names", "dataType": ["text"]},
+        {"name": "stability_employers_count", "dataType": ["int"]},
+        {"name": "stability_avg_years_per_employer", "dataType": ["string"]},
+        {"name": "stability_years_at_current_employer", "dataType": ["string"]},
+        {"name": "socio_address", "dataType": ["text"]},
+        {"name": "socio_alma_mater", "dataType": ["string"]},
+        {"name": "socio_high_school", "dataType": ["string"]},
+        {"name": "socio_education_system", "dataType": ["string"]},
+        {"name": "socio_second_foreign_language", "dataType": ["string"]},
+        {"name": "flag_stem_degree", "dataType": ["string"]},
+        {"name": "flag_military_service_status", "dataType": ["string"]},
+        {"name": "flag_worked_at_financial_institution", "dataType": ["string"]},
+        {"name": "flag_worked_for_egyptian_government", "dataType": ["string"]},
+        {"name": "full_text", "dataType": ["text"]}
+      ]
+    },
+    "CVSection": {
+      "class": "CVSection",
+      "vectorizer": "text2vec-transformers",
+      "properties": [
+        {"name": "parent_sha", "dataType": ["string"]},
+        {"name": "section_type", "dataType": ["string"]},
+        {"name": "section_text", "dataType": ["text"]}
+      ]
+    },
+    "RoleDocument": {
+      "class": "RoleDocument",
+      "vectorizer": "none",
+      "properties": [
+        {"name": "sha", "dataType": ["string"]},
+        {"name": "timestamp", "dataType": ["string"]},
+        {"name": "filename", "dataType": ["string"]},
+        {"name": "role_title", "dataType": ["string"]},
+        {"name": "full_text", "dataType": ["text"]}
+      ]
+    },
+    "RoleSection": {
+      "class": "RoleSection",
+      "vectorizer": "text2vec-transformers",
+      "properties": [
+        {"name": "parent_sha", "dataType": ["string"]},
+        {"name": "section_type", "dataType": ["string"]},
+        {"name": "section_text", "dataType": ["text"]}
+      ]
+    }
+  }
+}

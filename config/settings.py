@@ -124,6 +124,18 @@ class AppConfig:
         v = os.getenv("WEAVIATE_GRPC_PORT")
         if v is None or v == "":
             return None
+
+    @property
+    def weaviate_schema_path(self) -> str | None:
+        """Path to the external Weaviate schema JSON file (required for startup).
+
+        Read from WEAVIATE_SCHEMA_PATH. If not set callers should treat this as
+        a fatal configuration error.
+        """
+        v = os.getenv("WEAVIATE_SCHEMA_PATH")
+        if v is None or v == "":
+            return None
+        return v
         try:
             return int(v)
         except Exception:

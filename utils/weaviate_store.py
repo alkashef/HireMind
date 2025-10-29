@@ -159,13 +159,36 @@ class WeaviateStore:
         ]
 
         role_section_props = cv_section_props
+        role_section_props = cv_section_props
 
-        classes: Dict[str, Dict[str, Any]] = {
-            "CVDocument": {"class": "CVDocument", "vectorizer": "none", "properties": cv_properties},
-            "CVSection": {"class": "CVSection", "vectorizer": "none", "properties": cv_section_props},
-            "RoleDocument": {"class": "RoleDocument", "vectorizer": "none", "properties": role_properties},
-            "RoleSection": {"class": "RoleSection", "vectorizer": "none", "properties": role_section_props},
-        }
+        # Load schema path from AppConfig (required). The application will
+        # crash if the configuration is missing or the file cannot be read so
+        # that schema management is an explicit operational step.
+        schema_path_cfg = cfg.weaviate_schema_path
+        if not schema_path_cfg:
+            raise RuntimeError(
+                "WEAVIATE_SCHEMA_PATH not set in config/.env or environment; schema is required"
+            )
+
+        schema_path = Path(schema_path_cfg)
+        # If a relative path was provided, resolve it relative to the repo root
+        if not schema_path.is_absolute():
+            repo_root = Path(__file__).resolve().parent.parent
+            schema_path = (repo_root / schema_path).resolve()
+
+        if not schema_path.exists():
+            raise RuntimeError(f"Weaviate schema file not found at: {schema_path}")
+
+        with schema_path.open("r", encoding="utf-8") as fh:
+            loaded = json.load(fh)
+
+        # Expect either {"classes": {...}} or a direct classes mapping
+        if isinstance(loaded, dict) and "classes" in loaded:
+            classes = loaded["classes"]
+        elif isinstance(loaded, dict):
+            classes = loaded
+        else:
+            raise RuntimeError(f"Invalid weaviate schema format in {schema_path}")
 
         # Create missing classes only
         created = []
@@ -433,8 +456,8 @@ class WeaviateStore:
                 self.logger.log_kv("WEAVIATE_CVSECTION_UPDATED", id=obj_id, parent_sha=parent_sha)
                 return {"id": obj_id, "created": False, "weaviate_ok": True}
             else:
-                # create with vector
-                new_id = self.client.data_object.create(props, "CVSection", vector=embedding)
+                # create (let Weaviate compute/store the vector natively)
+                new_id = self.client.data_object.create(props, "CVSection")
                 nid = new_id.get("id") if isinstance(new_id, dict) else new_id
                 self.logger.log_kv("WEAVIATE_CVSECTION_CREATED", id=nid, parent_sha=parent_sha)
                 return {"id": nid, "created": True, "weaviate_ok": True}
@@ -519,7 +542,7 @@ class WeaviateStore:
                     self.client.data_object.update(props, "RoleSection", uuid=obj_id)
                     self.logger.log_kv("WEAVIATE_ROLESECTION_UPDATED", id=obj_id, parent_sha=parent_sha)
                     return {"id": obj_id, "created": False, "weaviate_ok": True}
-            new_id = self.client.data_object.create(props, "RoleSection", vector=embedding)
+            new_id = self.client.data_object.create(props, "RoleSection")
             nid = new_id.get("id") if isinstance(new_id, dict) else new_id
             self.logger.log_kv("WEAVIATE_ROLESECTION_CREATED", id=nid, parent_sha=parent_sha)
             return {"id": nid, "created": True, "weaviate_ok": True}
