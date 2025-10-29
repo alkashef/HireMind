@@ -166,10 +166,12 @@ def test_hermes_fp16_and_4bit():
                         total_bytes = torch.cuda.get_device_properties(0).total_memory
                         total_gb = int(total_bytes // (1024 ** 3))
                         cuda_hint_gb = max(total_gb - 1, 2)
-                        max_memory = {"cuda:0": f"{cuda_hint_gb}GB", "cpu": "90GB"}
+                        # Use integer GPU device keys (0) because recent transformers
+                        # may expect integers for GPU/XPU device identifiers.
+                        max_memory = {0: f"{cuda_hint_gb}GB", "cpu": "90GB"}
                     except Exception:
                         # Fallback conservative hint
-                        max_memory = {"cuda:0": "6GB", "cpu": "90GB"}
+                        max_memory = {0: "6GB", "cpu": "90GB"}
 
                     model2 = AutoModelForCausalLM.from_pretrained(
                         str(HERMES_MODEL_DIR),
