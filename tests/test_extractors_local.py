@@ -30,9 +30,9 @@ def test_pdf_to_text_local():
     try:
         text = pdf_to_text(PDF_PATH)
     except RuntimeError as exc:
-        pytest.skip(f"PyMuPDF not available: {exc}")
+        pytest.fail(f"PyMuPDF not available: {exc}")
     except ValueError as exc:
-        pytest.skip(f"PDF unreadable or missing: {exc}")
+        pytest.fail(f"PDF unreadable or missing: {exc}")
 
     assert isinstance(text, str) and text.strip(), "PDF extraction returned empty text"
 
@@ -45,9 +45,9 @@ def test_docx_to_text_local():
     try:
         text = docx_to_text(DOCX_PATH)
     except RuntimeError as exc:
-        pytest.skip(f"python-docx not available: {exc}")
+        pytest.fail(f"python-docx not available: {exc}")
     except ValueError as exc:
-        pytest.skip(f"DOCX unreadable or missing: {exc}")
+        pytest.fail(f"DOCX unreadable or missing: {exc}")
 
     assert isinstance(text, str) and text.strip(), "DOCX extraction returned empty text"
 

@@ -191,7 +191,7 @@ def test_hermes_fp16_and_4bit():
                     except Exception:
                         pass
                     print("DEBUG: offload exception:", exc2)
-                    pytest.skip(f"Skipping 4-bit Hermes check: failed to load with offload: {exc2}")
+                    pytest.fail(f"Skipping 4-bit Hermes check: failed to load with offload: {exc2}")
             else:
                 raise RuntimeError(f"Failed to load model in 4-bit on CUDA: {load_exc}")
 
@@ -217,7 +217,7 @@ def test_hermes_fp16_and_4bit():
                 print(f"DEBUG: params total={total}, on_cuda={cuda_cnt}, on_cpu={total-cuda_cnt}")
             except Exception:
                 print("DEBUG: failed to count params on devices")
-            pytest.skip("4-bit model loaded but no parameters placed on CUDA (insufficient GPU RAM); skipping 4-bit checks")
+            pytest.fail("4-bit model loaded but no parameters placed on CUDA (insufficient GPU RAM); insufficient GPU RAM for 4-bit checks")
 
         prompt_path2 = PROJECT_ROOT / "prompts" / "prompt_numeric_2_plus_2.md"
         prompt = prompt_path2.read_text(encoding="utf-8").strip()

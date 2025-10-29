@@ -21,6 +21,16 @@ class AppConfig:
         env_path = root / ".env"
         if env_path.exists():
             load_dotenv(dotenv_path=env_path)
+        # Also attempt to load a repository-root .env (higher precedence for
+        # developer machines that place their secrets at repo root).
+        try:
+            repo_root = root.parent
+            repo_env = repo_root / ".env"
+            if repo_env.exists():
+                load_dotenv(dotenv_path=repo_env)
+        except Exception:
+            # best-effort: don't fail construction if dotfiles are inaccessible
+            pass
 
     @property
     def data_path(self) -> Path:

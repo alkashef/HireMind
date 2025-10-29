@@ -195,6 +195,43 @@ Notes:
 - Some tests require optional packages or model files (e.g., `sentence-transformers`, `torch` with CUDA, Hermes models). The tests are written to skip with helpful messages when prerequisites are missing.
 - Prefer running tests in the project's virtual environment (`conda activate hiremind`).
 
+Environment sourcing for tests
+------------------------------
+
+The test suite now reads runtime configuration from `config/.env` automatically
+before tests run. Any KEY=VALUE lines in that file that are not already set in
+the process environment will be exported into `os.environ`. This makes it
+convenient to keep local settings (for example `TEST_CV_PATH` or
+`TEST_CV_JSON_OUTPUT`) in `config/.env` while allowing sensitive values like
+`OPENAI_API_KEY` to be provided via the shell if you prefer.
+
+Commands (Windows cmd.exe)
+--------------------------
+
+Run all tests:
+
+```cmd
+python -m pytest -q
+```
+
+Run the PDF end-to-end tests (extraction + optional OpenAI steps):
+
+```cmd
+python -m pytest -q tests/test_end2end_extract_pdf.py -s
+```
+
+Notes about OpenAI-dependent tests
+---------------------------------
+
+- Tests that call the OpenAI API require `OPENAI_API_KEY` and valid SSL
+    certificate env vars. You can either provide those in `config/.env` or set
+    them in your shell. The test runner will read `config/.env` so values placed
+    there are picked up automatically.
+
+Security note: keep real API keys out of the repository; use `config/.env` as
+a local-only file and ensure it's ignored by git. Keep `config/.env-example`
+in the repo to show required variable names.
+
 ## How to Run
 
 #### Web UI Mode (Default)
