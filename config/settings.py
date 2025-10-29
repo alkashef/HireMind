@@ -113,6 +113,22 @@ class AppConfig:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    @property
+    def weaviate_grpc_port(self) -> int | None:
+        """Optional explicit gRPC port for Weaviate connections.
+
+        If set via the WEAVIATE_GRPC_PORT environment variable, returns the
+        integer port. Otherwise returns None so callers can choose a sensible
+        default.
+        """
+        v = os.getenv("WEAVIATE_GRPC_PORT")
+        if v is None or v == "":
+            return None
+        try:
+            return int(v)
+        except Exception:
+            return None
+
     # Prompt template filenames (inside the `prompts/` folder).
     # These return the filename (string). Callers should join with the prompts
     # folder when opening the file (e.g., Path('prompts') / cfg.prompt_...).

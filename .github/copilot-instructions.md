@@ -42,7 +42,6 @@
 - Proceed with deletes and renames as instructed, without confirmation.
 - Keep the existing README structure; only add/change details within current sections. Ask before removing or adding sections.
 - Use the README to document outputs and usage only; do not use it to change project inputs or behavior.
-- Use the TODO to list todos only; do not use it to change project inputs or behavior.
 - **After each code edit or ask, update:
   - `requirements.txt` if new libraries are used, versions changed, or libraries removed. 
   - `README.md` if new features or significant changes are introduced. Include how to setup and test. 
@@ -51,3 +50,6 @@
 - Avoid repetition of instructions or disclaimers.
 - Be **very concise and to the point.**
 - Less verbose is better.
+- Explain root causes of issues in a one-liner. 
+- Explain solutions in a one-liner.
+- Don't explain your internal thought process and todo steps unless asked.

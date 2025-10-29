@@ -339,6 +339,159 @@ def test_paraphrase_vectorize_and_append_json():
     assert "paraphrase_embeddings" in existing and isinstance(existing["paraphrase_embeddings"], list)
 
 
+def test_write_json_to_weaviate_and_dump_csv():
+    """Write the canonical JSON produced by previous tests to Weaviate, then
+    read it back and write a CSV file with columns: Attribute | Data Type | Value.
+
+    The CSV output path is taken from TEST_CV_CSV_OUTPUT (env or config/.env).
+    This test is best-effort: it will fail if Weaviate is not configured/accessible
+    to make failures explicit to the test runner.
+    """
+    # Resolve JSON output path
+    json_out = os.environ.get("TEST_CV_JSON_OUTPUT")
+    if not json_out:
+        pytest.fail("TEST_CV_JSON_OUTPUT not set in environment or config/.env; cannot run Weaviate write/read test")
+
+    json_path = Path(json_out)
+    if not json_path.is_absolute():
+        json_path = Path(__file__).resolve().parents[1] / json_path
+    if not json_path.exists():
+        pytest.fail(f"Prerequisite JSON missing: {json_path}. Run earlier extraction tests first.")
+
+    import json as _json
+
+    try:
+        with json_path.open("r", encoding="utf-8") as fh:
+            payload = _json.load(fh) or {}
+    except Exception as exc:
+        pytest.fail(f"Failed to read canonical JSON at {json_path}: {exc}")
+
+    # Resolve CV file and compute sha (weaviate keys use file content sha)
+    pdf = resolve_cv_path()
+    if pdf is None:
+        pytest.fail("No sample PDF found; cannot compute sha to write to Weaviate")
+
+    from utils.extractors import compute_sha256_bytes
+    try:
+        sha = compute_sha256_bytes(pdf.read_bytes())
+    except Exception as exc:
+        pytest.fail(f"Failed to compute SHA for CV file {pdf}: {exc}")
+
+    # Prepare Weaviate store and write the document
+    try:
+        from utils.weaviate_store import WeaviateStore
+    except Exception as exc:
+        pytest.fail(f"Weaviate integration not available: {exc}")
+
+    ws = WeaviateStore()
+    # Ensure schema exists (will raise if client not configured)
+    try:
+        ws.ensure_schema()
+    except Exception as exc:
+        pytest.fail(f"Failed to ensure Weaviate schema or connect to Weaviate: {exc}")
+
+    # Use the extracted JSON as attributes where sensible; also store the
+    # full JSON dump in the 'cv' property so no data is lost.
+    attrs = dict(payload) if isinstance(payload, dict) else {"payload": payload}
+    # store full json string under 'cv' so it is queryable as text
+    try:
+        attrs["cv"] = _json.dumps(payload, ensure_ascii=False)
+    except Exception:
+        attrs["cv"] = str(payload)
+
+    try:
+        res = ws.write_cv_to_db(sha=sha, filename=pdf.name, full_text=payload.get("text", ""), attributes=attrs)
+    except Exception as exc:
+        pytest.fail(f"Failed to write CV to Weaviate: {exc}")
+
+    # Read back from Weaviate
+    try:
+        readback = ws.read_cv_from_db(sha)
+    except Exception as exc:
+        pytest.fail(f"Failed to read CV from Weaviate after write: {exc}")
+
+    if not readback:
+        pytest.fail(f"Weaviate returned no document for sha={sha} after write")
+
+    # Prepare CSV rows: include top-level id/sha/filename + attributes and full_text
+    rows = []
+    # helper to determine data type string
+    def dtype(v):
+        if v is None:
+            return "null"
+        if isinstance(v, bool):
+            return "bool"
+        if isinstance(v, int):
+            return "int"
+        if isinstance(v, float):
+            return "float"
+        if isinstance(v, (list, tuple)):
+            return "list"
+        if isinstance(v, dict):
+            return "dict"
+        return "string"
+
+    # top-level metadata
+    rows.append(("id", dtype(readback.get("id")), readback.get("id")))
+    rows.append(("sha", dtype(readback.get("sha")), readback.get("sha")))
+    rows.append(("filename", dtype(readback.get("filename")), readback.get("filename")))
+
+    # attributes dict
+    attrs = readback.get("attributes", {}) or {}
+    for k, v in sorted(attrs.items()):
+        val = v
+        if isinstance(v, (dict, list)):
+            try:
+                val = _json.dumps(v, ensure_ascii=False)
+            except Exception:
+                val = str(v)
+        rows.append((k, dtype(v), val))
+
+    # full text
+    rows.append(("full_text", dtype(readback.get("full_text")), readback.get("full_text")))
+
+    # Resolve CSV output path from env or config/.env
+    csv_out = os.environ.get("TEST_CV_CSV_OUTPUT")
+    if not csv_out:
+        # try config/.env
+        try:
+            project_root = Path(__file__).resolve().parents[1]
+            dotenv_path = project_root / "config" / ".env"
+            if dotenv_path.exists():
+                with dotenv_path.open("r", encoding="utf-8") as fh:
+                    for line in fh:
+                        s = line.strip()
+                        if not s or s.startswith("#") or "=" not in s:
+                            continue
+                        k, v = s.split("=", 1)
+                        if k.strip() == "TEST_CV_CSV_OUTPUT":
+                            csv_out = v.strip().strip('"').strip("'")
+                            break
+        except Exception:
+            csv_out = None
+
+    if not csv_out:
+        pytest.fail("TEST_CV_CSV_OUTPUT not set in environment or config/.env; cannot write CSV")
+
+    csv_path = Path(csv_out)
+    if not csv_path.is_absolute():
+        csv_path = Path(__file__).resolve().parents[1] / csv_path
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write CSV with pipe separator and header
+    try:
+        with csv_path.open("w", encoding="utf-8") as fh:
+            fh.write("Attribute|Data Type|Value\n")
+            for a, t, v in rows:
+                line = f"{a}|{t}|{(v if v is not None else '')}\n"
+                fh.write(line)
+    except Exception as exc:
+        pytest.fail(f"Failed to write CSV to {csv_path}: {exc}")
+
+    print(f"WROTE WEAVIATE CSV: {csv_path}")
+    assert csv_path.exists() and csv_path.stat().st_size > 0
+
+
 if __name__ == "__main__":
     # Allow running the test file directly: accept optional path arg
     arg = sys.argv[1] if len(sys.argv) > 1 else None
