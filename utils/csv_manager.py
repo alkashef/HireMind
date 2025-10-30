@@ -32,44 +32,41 @@ class CSVStore:
     """
 
     FILE_NAME = "applicants.csv"
-    # CSV columns (file headers)
-    HEADER = [
+    # Default CSV columns (file headers)
+    DEFAULT_HEADER = [
         "ID",
         "Timestamp",
         "CV",
         "Filename",
-        # Personal Information
-        "PersonalInformation_FirstName",
-        "PersonalInformation_LastName",
-        "PersonalInformation_FullName",
-        "PersonalInformation_Email",
-        "PersonalInformation_Phone",
-        # Professionalism
-        "Professionalism_MisspellingCount",
-        "Professionalism_MisspelledWords",
-        "Professionalism_VisualCleanliness",
-        "Professionalism_ProfessionalLook",
-        "Professionalism_FormattingConsistency",
-        # Experience
-        "Experience_YearsSinceGraduation",
-        "Experience_TotalYearsExperience",
-        "Experience_EmployerNames",
-        # Stability
-        "Stability_EmployersCount",
-        "Stability_AvgYearsPerEmployer",
-        "Stability_YearsAtCurrentEmployer",
-        # Socioeconomic Standard
-        "SocioeconomicStandard_Address",
-        "SocioeconomicStandard_AlmaMater",
-        "SocioeconomicStandard_HighSchool",
-        "SocioeconomicStandard_EducationSystem",
-        "SocioeconomicStandard_SecondForeignLanguage",
-        # Flags
-        "Flags_FlagSTEMDegree",
-        "Flags_MilitaryServiceStatus",
-        "Flags_WorkedAtFinancialInstitution",
-        "Flags_WorkedForEgyptianGovernment",
+        # ...existing code...
     ]
+    HEADER = list(DEFAULT_HEADER)  # Will be extended dynamically
+    @staticmethod
+    def flatten_json(y, parent_key='', sep='_'):
+        """Flatten nested dicts/lists for CSV export."""
+    """
+    Recursively flattens a nested dictionary, including lists and dicts inside lists.
+    For lists, if items are dicts, flatten each with index; else join as string.
+    """
+    out = {}
+    def _flatten(val, key):
+        if isinstance(val, dict):
+            for k2, v2 in val.items():
+                _flatten(v2, f"{key}{sep}{k2}" if key else k2)
+        elif isinstance(val, list):
+            for idx, item in enumerate(val):
+                _flatten(item, f"{key}{sep}{idx}")
+        else:
+            # Serialize non-string types as JSON
+            if isinstance(val, (int, float, bool)) or val is None:
+                out[key] = val
+            else:
+                try:
+                    out[key] = json.dumps(val, ensure_ascii=False) if not isinstance(val, str) else val
+                except Exception:
+                    out[key] = str(val)
+    _flatten(y, parent_key)
+    return out
 
     def __init__(self, config: AppConfig, logger: AppLogger) -> None:
         self.config = config
@@ -171,16 +168,21 @@ class CSVStore:
             self.logger.log_kv("CSV_READ_INDEX_ERROR", error=e)
         return index
 
-    def write_rows(self, rows_by_id: Dict[str, dict]) -> None:
-        """Write all rows (file columns). Overwrites the CSV."""
-        p = self.csv_path
-        p.parent.mkdir(parents=True, exist_ok=True)
+    # CSV export removed as requested.
+        all_keys = set(self.DEFAULT_HEADER)
+        for r in rows_by_id.values():
+            flat = self.flatten_json(r)
+            flat_rows.append(flat)
+            all_keys.update(flat.keys())
+        header = list(all_keys)
+        # Sort header for stability, keep DEFAULT_HEADER order first
+        header = self.DEFAULT_HEADER + sorted([k for k in header if k not in self.DEFAULT_HEADER])
         try:
             with p.open("w", encoding="utf-8", newline="") as wf:
                 writer = csv.writer(wf)
-                writer.writerow(self.HEADER)
-                for r in rows_by_id.values():
-                    writer.writerow([r.get(col, "") for col in self.HEADER])
+                writer.writerow(header)
+                for flat in flat_rows:
+                    writer.writerow([flat.get(col, "") for col in header])
             self.logger.log_kv("CSV_WRITE_ROWS", rows=len(rows_by_id), path=str(p))
         except Exception as e:
             self.logger.log_kv("CSV_WRITE_ROWS_ERROR", error=e, path=str(p))

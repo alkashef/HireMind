@@ -155,5 +155,8 @@ models/
 # Ignore Git files
 .git/
 
-logs/
+logs/*
 .env
+data/weaviate_data/*
+tests/data/*.json
+tests/data/*.csv

@@ -470,8 +470,10 @@ class WeaviateStore:
         raise RuntimeError(f"Unable to create data object. Attempts: {attempts}")
 
     def _data_object_update(self, props: Dict[str, Any], class_name: str, uuid: str) -> None:
-        """Adapter for updating a data object by uuid."""
+        """Adapter for updating a data object by uuid. Raises if uuid is None."""
         assert self.client is not None, "Weaviate client not initialized"
+        if uuid is None:
+            raise RuntimeError(f"Cannot update data object: uuid is None for class '{class_name}'. Object must be created first.")
         attempts: List[str] = []
         vector = None
         if isinstance(props, dict) and "_vector" in props:
@@ -895,13 +897,18 @@ class WeaviateStore:
         found = self._find_cv_by_sha(sha)
         if found:
             obj_id = found.get("id")
-            # update existing
-            self._data_object_update(props, "CVDocument", obj_id)
-            self.logger.log_kv("WEAVIATE_CV_UPDATED", id=obj_id, sha=sha)
-            return {"id": obj_id, "properties": props}
+            if obj_id is not None:
+                self._data_object_update(props, "CVDocument", obj_id)
+                self.logger.log_kv("WEAVIATE_CV_UPDATED", id=obj_id, sha=sha)
+                return {"id": obj_id, "properties": props}
+            else:
+                # If id is missing, create the object instead
+                obj_id = self._data_object_create(props, "CVDocument")
+                nid = obj_id.get("id") if isinstance(obj_id, dict) else obj_id
+                self.logger.log_kv("WEAVIATE_CV_CREATED", id=nid, sha=sha)
+                return {"id": obj_id, "properties": props}
         else:
             obj_id = self._data_object_create(props, "CVDocument")
-            # created id may be dict or raw id
             nid = obj_id.get("id") if isinstance(obj_id, dict) else obj_id
             self.logger.log_kv("WEAVIATE_CV_CREATED", id=nid, sha=sha)
             return {"id": obj_id, "properties": props}

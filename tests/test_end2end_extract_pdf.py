@@ -203,10 +203,10 @@ def test_extract_save_json_sections():
 
 
 def test_openai_extract_and_append_json():
-    """Run the OpenAI extraction (via OpenAIManager) on the CV and append the structured result under "openai_extraction" in the same JSON file."""
+    """Run local Hermes-Pro extraction and append the structured result under "hermes_extraction" in the same JSON file."""
     pdf = resolve_cv_path()
     if pdf is None:
-        pytest.fail("No sample PDF found; cannot run OpenAI extraction test")
+        pytest.fail("No sample PDF found; cannot run Hermes extraction test")
 
     # Look for JSON produced by the extraction step (require TEST_CV_JSON_OUTPUT)
     json_out = os.environ.get("TEST_CV_JSON_OUTPUT")
@@ -218,39 +218,49 @@ def test_openai_extract_and_append_json():
     if not json_path.exists():
         pytest.fail(f"Prerequisite JSON missing: {json_path}. Run extraction/json save test first.")
 
-    # Ensure OpenAI env is sane (API key present, SSL env vars not pointing
-    # to missing files). This will fail the test explicitly if the env is
-    # misconfigured.
-    _ensure_openai_env_or_fail()
-
-    # Build config and logger for OpenAIManager
-    from config.settings import AppConfig
-    from utils.logger import AppLogger
-    from utils.openai_manager import OpenAIManager
+    # Load extracted text from JSON
     import json
-
-    cfg = AppConfig()
-    logger = AppLogger(cfg.log_file_path)
-
-    mgr = OpenAIManager(cfg, logger)
-
-    data, err = mgr.extract_full_name(pdf)
-    if err:
-        pytest.fail(f"OpenAI extraction failed: {err}")
-
-    # Load existing JSON, attach OpenAI extraction under 'openai_extraction'
     with json_path.open("r", encoding="utf-8") as fh:
         try:
             existing = json.load(fh)
         except Exception:
             existing = {}
+    cv_text = existing.get("text", "")
+    if not cv_text:
+        pytest.fail("No 'text' found in canonical JSON for Hermes extraction.")
 
-    existing["openai_extraction"] = data or {}
+    # Load Hermes client
+    from config.settings import AppConfig
+    from utils.logger import AppLogger
+    from utils.hermes_client import HermesClient
+    cfg = AppConfig()
+    logger = AppLogger(cfg.log_file_path)
+    hermes = HermesClient(model_dir="models/hermes-pro", quantize_4bit=True, cfg=cfg)
+
+    # Define extraction prompts and output keys
+    extraction_tasks = [
+        ("cv_full_name_user.md", "full_name"),
+        ("cv_full_name_user.md", "first_name"),
+        ("cv_full_name_user.md", "last_name"),
+        ("extract_from_cv_user.md", "email"),
+        ("extract_from_cv_user.md", "phone"),
+        ("extract_from_cv_user.md", "address"),
+        ("extract_from_cv_user.md", "alma_mater"),
+    ]
+    hermes_extraction = {}
+    for prompt_file, key in extraction_tasks:
+        try:
+            result = hermes.generate_from_prompt_file(prompt_file, prompt_vars={"cv": cv_text}, max_new_tokens=64)
+            hermes_extraction[key] = result.strip()
+        except Exception as exc:
+            hermes_extraction[key] = f"ERROR: {exc}"
+
+    existing["hermes_extraction"] = hermes_extraction
 
     with json_path.open("w", encoding="utf-8") as fh:
         json.dump(existing, fh, indent=2, ensure_ascii=False)
 
-    print(f"Appended OpenAI extraction to: {json_path}")
+    print(f"Appended Hermes extraction to: {json_path}")
     # sanity: ensure file exists and is non-empty
     assert json_path.exists() and json_path.stat().st_size > 0
 

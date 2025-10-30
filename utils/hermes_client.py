@@ -174,7 +174,15 @@ class HermesClient:
         gen_opts.update(generate_kwargs)
 
         inputs = self.tokenizer(prompt, return_tensors="pt")
-        # Rely on device_map for placement; HF will accept CPU tensors
+        # Move input tensors to model device
+        try:
+            model_device = next(self.model.parameters()).device
+            for k in inputs:
+                if hasattr(inputs[k], 'to'):
+                    inputs[k] = inputs[k].to(model_device)
+        except Exception:
+            pass  # fallback: let HF handle device placement if possible
+
         out = self.model.generate(**inputs, **gen_opts)
         text = self.tokenizer.decode(out[0], skip_special_tokens=True)
         return text
