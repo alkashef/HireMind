@@ -7,12 +7,22 @@ services:
       - "8080:8080"
     environment:
       # Allow anonymous access locally; secure this if exposing publicly
-      - AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true
+      - AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=${AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED:-true}
       # Persist data locally for convenience
       - PERSISTENCE_DATA_PATH=/var/lib/weaviate
-      # Use no internal vectorizer modules; we supply vectors externally
-      - DEFAULT_VECTORIZER_MODULE=none
-      - ENABLE_MODULES=none
+      # Vectorizer module: read from host env when possible (defaults kept for safety)
+      # Development-safe defaults: disable modules by default so the container
+      # doesn't attempt to initialize optional vectorizer modules that need
+      # extra configuration (TRANSFORMERS_*). To enable a module set
+      # ENABLE_MODULES=text2vec-transformers and provide TRANSFORMERS_* vars.
+      - DEFAULT_VECTORIZER_MODULE=${DEFAULT_VECTORIZER_MODULE:-none}
+      - ENABLE_MODULES=${ENABLE_MODULES:-none}
+      # Optional transformer inference config (leave empty for dev/local embeddings)
+      - TRANSFORMERS_INFERENCE_API=${TRANSFORMERS_INFERENCE_API:-}
+      - TRANSFORMERS_PASSAGE_INFERENCE_API=${TRANSFORMERS_PASSAGE_INFERENCE_API:-}
+      - TRANSFORMERS_QUERY_INFERENCE_API=${TRANSFORMERS_QUERY_INFERENCE_API:-}
+      # Use a separate gRPC port by default to avoid accidental conflicts with HTTP
+      - WEAVIATE_GRPC_PORT=${WEAVIATE_GRPC_PORT:-8081}
     volumes:
       - ./data/weaviate_data:/var/lib/weaviate
     restart: unless-stopped

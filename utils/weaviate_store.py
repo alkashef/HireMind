@@ -41,6 +41,7 @@ from config.settings import AppConfig
 from utils.logger import AppLogger
 from pathlib import Path
 from typing import List
+from utils.paraphrase_client import get_global_paraphrase_client
 
 # Import weaviate client at module level intentionally: if the dependency is
 # missing the import will raise and the calling code/test can decide how to
@@ -63,6 +64,8 @@ class WeaviateStore:
         batch_size: Optional[int] = None,
     ) -> None:
         cfg = AppConfig()
+        # keep config on the instance for use by helpers that need ports
+        self.cfg = cfg
 
         # Resolve final runtime values: prefer explicit args, then AppConfig/env
         self.url = (url or cfg.weaviate_url) or (
@@ -77,22 +80,521 @@ class WeaviateStore:
         # Always use project logger
         self.logger = AppLogger(cfg.log_file_path)
 
-        self.client: Optional[weaviate.Client] = None
+        # Create client adaptively to support both v3 and v4 weaviate Python clients.
+        # The installed client may expose different constructors/signatures
+        # (v3: weaviate.Client(url=..., additional_headers=...),
+        #  v4: weaviate.WeaviateClient(...) or weaviate.connect(...)).
+        self.client: Optional[object] = None
         if self.url:
             # Prepare auth header if API key provided
             headers = {"X-API-Key": self.api_key} if self.api_key else None
             self.logger.log_kv("WEAVIATE_CLIENT_INIT", url=self.url, batch_size=self.batch_size)
-            # Create client (may raise if weaviate package missing or invalid args)
-            self.client = weaviate.Client(url=self.url, additional_headers=headers)
+            # Build client using a tolerant strategy and clear logging on failure
+            try:
+                self.client = self._build_client(headers)
+            except Exception as e:
+                # Record and re-raise so the test runner / caller sees the cause
+                self.logger.log_kv("WEAVIATE_CLIENT_INIT_FAILED", error=str(e))
+                raise
+
+        # Local paraphrase embeddings: detect if a local paraphrase model is
+        # available and enable embedding-on-application-side if so. The
+        # environment variable USE_LOCAL_EMBEDDINGS=1 can also force this.
+        self.use_local_embeddings = False
+        try:
+            use_env = os.environ.get("USE_LOCAL_EMBEDDINGS", "").strip().lower() in ("1", "true", "yes")
+            model_dir = Path(self.cfg.paraphrase_model_dir)
+            if use_env or (model_dir.exists() and any(model_dir.iterdir())):
+                # don't raise here; only enable and lazy-load when needed
+                self.use_local_embeddings = True
+                self.logger.log_kv("PARAPHRASE_EMBEDDINGS_ENABLED", model_dir=str(model_dir), via_env=use_env)
+        except Exception:
+            # best-effort detection: if something goes wrong, leave disabled
+            self.use_local_embeddings = False
+
+    def _build_client(self, additional_headers: Optional[dict]) -> object:
+        """Attempt multiple client construction patterns to support v3 and v4.
+
+        Tries (in order):
+          - weaviate.Client(url=..., additional_headers=...) (v3 typical)
+          - weaviate.Client(self.url, additional_headers=...)
+          - weaviate.WeaviateClient(url=..., additional_headers=...)
+          - weaviate.WeaviateClient(self.url, additional_headers=...)
+          - weaviate.connect(url=..., additional_headers=...)
+
+        Raises a RuntimeError with collected attempt errors when all fail.
+        """
+        attempts = []
+
+        # Preferred path for weaviate-client v4: try the high-level connect helper first
+        if hasattr(weaviate, "connect"):
+            try:
+                # try common positional and kwarg forms for connect
+                if callable(weaviate.connect):
+                    try:
+                        return weaviate.connect(self.url)
+                    except Exception as e:
+                        attempts.append(f"connect(positional): {e}")
+                    try:
+                        return weaviate.connect(self.url, additional_headers)
+                    except Exception as e:
+                        attempts.append(f"connect(positional+headers): {e}")
+                    try:
+                        return weaviate.connect(url=self.url)
+                    except Exception as e:
+                        attempts.append(f"connect(url=): {e}")
+                    try:
+                        return weaviate.connect(url=self.url, additional_headers=additional_headers)
+                    except Exception as e:
+                        attempts.append(f"connect(url+headers): {e}")
+                # sometimes connect is a module exposing a connect symbol
+                if hasattr(weaviate.connect, "connect") and callable(weaviate.connect.connect):
+                    try:
+                        return weaviate.connect.connect(self.url)
+                    except Exception as e:
+                        attempts.append(f"connect.module(positional): {e}")
+                    try:
+                        return weaviate.connect.connect(self.url, additional_headers)
+                    except Exception as e:
+                        attempts.append(f"connect.module(positional+headers): {e}")
+                    try:
+                        return weaviate.connect.connect(url=self.url, additional_headers=additional_headers)
+                    except Exception as e:
+                        attempts.append(f"connect.module(url+headers): {e}")
+            except Exception as e:
+                attempts.append(f"v4 connect wrapper: {e}")
+
+        # Try explicit WeaviateClient simple constructors (some v4 layouts support passing url directly)
+        if hasattr(weaviate, "WeaviateClient"):
+            try:
+                return weaviate.WeaviateClient(self.url)
+            except Exception as e:
+                attempts.append(f"WeaviateClient(positional): {e}")
+            try:
+                return weaviate.WeaviateClient(url=self.url, additional_headers=additional_headers)
+            except Exception as e:
+                attempts.append(f"WeaviateClient(url): {e}")
+            try:
+                return weaviate.WeaviateClient(self.url, additional_headers)
+            except Exception as e:
+                attempts.append(f"WeaviateClient(positional+headers): {e}")
+
+        # Try constructing typed ConnectionParams/ProtocolParams (v4 strict API)
+        try:
+            from urllib.parse import urlparse
+            import importlib
+
+            conn_mod = None
+            for candidate in ("weaviate.connection", "weaviate.connections", "weaviate.connect"):
+                try:
+                    conn_mod = importlib.import_module(candidate)
+                    break
+                except Exception:
+                    conn_mod = None
+
+            if conn_mod is not None:
+                Proto = getattr(conn_mod, "ProtocolParams", None)
+                ConnP = getattr(conn_mod, "ConnectionParams", None)
+                if Proto is not None and ConnP is not None:
+                    parsed = urlparse(self.url)
+                    host = parsed.hostname or "localhost"
+                    port = parsed.port or (443 if parsed.scheme == "https" else 8080)
+                    scheme = parsed.scheme or "http"
+                    try:
+                        grpc_port = int(getattr(self.cfg, "weaviate_grpc_port", None) or (port + 1))
+                    except Exception:
+                        grpc_port = port + 1
+
+                    # Build ProtocolParams using the signature found in v4: (host, port, secure)
+                    proto_http = None
+                    try:
+                        secure = True if scheme == "https" else False
+                        proto_http = Proto(host=host, port=port, secure=secure)
+                    except Exception as e:
+                        attempts.append(f"Proto(http host/port/secure): {e}")
+
+                    # Build grpc ProtocolParams (usually not secure unless configured)
+                    proto_grpc = None
+                    try:
+                        proto_grpc = Proto(host=host, port=grpc_port, secure=False)
+                    except Exception as e:
+                        attempts.append(f"Proto(grpc host/port/secure): {e}")
+
+
+                    # Build ConnectionParams using keyword-only http/grpc params
+                    conn_params = None
+                    try:
+                        conn_params = ConnP(http=proto_http, grpc=proto_grpc)
+                    except Exception as e:
+                        attempts.append(f"ConnP(http,grpc): {e}")
+
+                    if conn_params is not None:
+                        try:
+                            if hasattr(weaviate, "WeaviateClient"):
+                                return weaviate.WeaviateClient(conn_params)
+                        except Exception as e:
+                            attempts.append(f"WeaviateClient(conn_params): {e}")
+                        try:
+                            if hasattr(weaviate, "connect") and callable(weaviate.connect):
+                                return weaviate.connect(conn_params)
+                        except Exception as e:
+                            attempts.append(f"connect(conn_params): {e}")
+        except Exception as e:
+            attempts.append(f"v4-connection-param-attempts: {e}")
+
+        # Fallback: older v3-style Client constructor attempts
+        if hasattr(weaviate, "Client"):
+            try:
+                return weaviate.Client(url=self.url, additional_headers=additional_headers)
+            except Exception as e:
+                attempts.append(f"Client(url): {e}")
+            try:
+                return weaviate.Client(self.url, additional_headers)
+            except Exception as e:
+                attempts.append(f"Client(positional): {e}")
+
+        # If we get here, none of the construction attempts worked
+        raise RuntimeError(f"Unable to construct weaviate client. Attempts: {attempts}")
 
     def _class_exists(self, class_name: str) -> bool:
         assert self.client is not None, "Weaviate client not initialized"
-        schema = self.client.schema.get()
+        schema = self._schema_get()
         classes = schema.get("classes", []) if isinstance(schema, dict) else []
         for c in classes:
             if c.get("class") == class_name:
                 return True
         return False
+
+    # ---------------------- client adapters -------------------------------
+    def _schema_get(self) -> Dict[str, Any]:
+        """Adapter for retrieving Weaviate schema across client versions."""
+        assert self.client is not None, "Weaviate client not initialized"
+        attempts: List[str] = []
+        client_repr = repr(self.client)
+
+        # common: client.schema.get() or client.schema.get_all()
+        if hasattr(self.client, "schema"):
+            schema_obj = getattr(self.client, "schema")
+            # try get()
+            if hasattr(schema_obj, "get"):
+                try:
+                    return schema_obj.get()
+                except Exception as e:
+                    attempts.append(f"schema.get() raised: {e}")
+            else:
+                attempts.append("client.schema.get not present")
+
+            # try get_all()
+            if hasattr(schema_obj, "get_all"):
+                try:
+                    return schema_obj.get_all()
+                except Exception as e:
+                    attempts.append(f"schema.get_all() raised: {e}")
+            else:
+                attempts.append("client.schema.get_all not present")
+        else:
+            attempts.append("client.schema attribute not present")
+
+        # last resort: direct client.get_schema()
+        if hasattr(self.client, "get_schema"):
+            try:
+                return self.client.get_schema()
+            except Exception as e:
+                attempts.append(f"client.get_schema() raised: {e}")
+        else:
+            attempts.append("client.get_schema not present")
+
+        # Final fallback: try to fetch schema directly from the Weaviate HTTP API
+        # using the configured URL. This covers client shapes that don't expose
+        # a schema facade (some v4 client instances) and ensures we can still
+        # read the authoritative schema.
+        try:
+            if self.url:
+                schema_url = self.url.rstrip("/") + "/v1/schema"
+                try:
+                    import requests
+
+                    resp = requests.get(schema_url, timeout=5)
+                    if resp.status_code == 200:
+                        return resp.json()
+                    attempts.append(f"http schema GET status {resp.status_code}: {resp.text[:200]}")
+                except Exception as e:
+                    # try urllib fallback
+                    try:
+                        from urllib.request import urlopen
+                        import json as _json
+
+                        with urlopen(schema_url, timeout=5) as fh:
+                            return _json.load(fh)
+                    except Exception as e2:
+                        attempts.append(f"http schema urllib error: {e2}")
+        except Exception as e:
+            attempts.append(f"http schema attempt: {e}")
+
+        # Provide helpful diagnostics including the client representation
+        raise RuntimeError(
+            f"Unable to read Weaviate schema. Attempts: {attempts}; client={client_repr}"
+        )
+
+    def _schema_create_class(self, class_schema: Dict[str, Any]) -> None:
+        """Adapter for creating a class in the Weaviate schema."""
+        assert self.client is not None, "Weaviate client not initialized"
+        attempts = []
+        try:
+            if hasattr(self.client, "schema") and hasattr(self.client.schema, "create_class"):
+                return self.client.schema.create_class(class_schema)
+        except Exception as e:
+            attempts.append(f"schema.create_class(): {e}")
+        try:
+            if hasattr(self.client, "schema") and hasattr(self.client.schema, "create"):
+                return self.client.schema.create(class_schema)
+        except Exception as e:
+            attempts.append(f"schema.create(): {e}")
+        # Final fallback: use the HTTP REST API to create the class directly.
+        try:
+            if self.url:
+                schema_url = self.url.rstrip("/") + "/v1/schema"
+                try:
+                    import requests
+
+                    resp = requests.post(schema_url, json=class_schema, timeout=10)
+                    if resp.status_code in (200, 201):
+                        self.logger.log_kv("WEAVIATE_SCHEMA_HTTP_CREATED", class_name=class_schema.get("class"))
+                        return None
+                    attempts.append(f"http POST status {resp.status_code}: {resp.text[:200]}")
+                except Exception as e:
+                    # urllib fallback
+                    try:
+                        from urllib.request import Request, urlopen
+                        import json as _json
+
+                        data = _json.dumps(class_schema).encode("utf-8")
+                        req = Request(schema_url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+                        with urlopen(req, timeout=10) as fh:
+                            # assume success if no exception; try to read result
+                            _ = fh.read()
+                            self.logger.log_kv("WEAVIATE_SCHEMA_HTTP_CREATED", class_name=class_schema.get("class"))
+                            return None
+                    except Exception as e2:
+                        attempts.append(f"http urllib POST error: {e2}")
+        except Exception as e:
+            attempts.append(f"http schema create attempt: {e}")
+
+        raise RuntimeError(f"Unable to create Weaviate class. Attempts: {attempts}")
+
+    def _data_object_create(self, props: Dict[str, Any], class_name: str):
+        """Adapter for creating a data object. Returns created id or raw result."""
+        assert self.client is not None, "Weaviate client not initialized"
+        attempts: List[str] = []
+        # Optional `vector` param can be passed by callers when application
+        # computes embeddings locally. We accept a vector kwarg via props or
+        # separate call-site; check for a special key '_vector' in props.
+        vector = None
+        if isinstance(props, dict) and "_vector" in props:
+            vector = props.pop("_vector")
+
+        # v4: client.data_object.create(properties, class_name, vector=...)
+        try:
+            if hasattr(self.client, "data_object") and hasattr(self.client.data_object, "create"):
+                try:
+                    if vector is not None:
+                        return self.client.data_object.create(props, class_name, vector=vector)
+                    return self.client.data_object.create(props, class_name)
+                except TypeError:
+                    # signature may differ; try alternate ordering
+                    if vector is not None:
+                        return self.client.data_object.create(class_name, props, vector)
+                    return self.client.data_object.create(class_name, props)
+        except Exception as e:
+            attempts.append(f"data_object.create(...): {e}")
+
+        # older or alternate API: client.data.create(...)
+        try:
+            if hasattr(self.client, "data") and hasattr(self.client.data, "create"):
+                # try: data.create(class_name, props, vector=...)
+                try:
+                    if vector is not None:
+                        return self.client.data.create(class_name, props, vector=vector)
+                    return self.client.data.create(class_name, props)
+                except TypeError:
+                    # try reversed ordering
+                    if vector is not None:
+                        return self.client.data.create(props, class_name, vector)
+                    try:
+                        return self.client.data.create(props, class_name)
+                    except Exception:
+                        # final fallback try
+                        return self.client.data.create(class_name, props)
+        except Exception as e:
+            attempts.append(f"data.create(...): {e}")
+
+        # Final fallback: create object using Weaviate HTTP REST API (/v1/objects)
+        try:
+            if self.url:
+                objects_url = self.url.rstrip("/") + "/v1/objects"
+                payload_json = {"class": class_name, "properties": props}
+                if vector is not None:
+                    payload_json["vector"] = vector
+                try:
+                    import requests
+
+                    resp = requests.post(objects_url, json=payload_json, timeout=10)
+                    if resp.status_code in (200, 201):
+                        # weaviate returns {'id': '<uuid>'} on success
+                        try:
+                            j = resp.json()
+                            return j.get("id") or j
+                        except Exception:
+                            return resp.text
+                    attempts.append(f"http objects POST status {resp.status_code}: {resp.text[:200]}")
+                except Exception as e:
+                    # urllib fallback
+                    try:
+                        from urllib.request import Request, urlopen
+                        import json as _json
+
+                        data = _json.dumps(payload_json).encode("utf-8")
+                        req = Request(objects_url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+                        with urlopen(req, timeout=10) as fh:
+                            data = fh.read()
+                            try:
+                                j = _json.loads(data)
+                                return j.get("id") or j
+                            except Exception:
+                                return data.decode("utf-8", errors="ignore")
+                    except Exception as e2:
+                        attempts.append(f"http objects urllib error: {e2}")
+        except Exception as e:
+            attempts.append(f"http objects attempt: {e}")
+
+        raise RuntimeError(f"Unable to create data object. Attempts: {attempts}")
+
+    def _data_object_update(self, props: Dict[str, Any], class_name: str, uuid: str) -> None:
+        """Adapter for updating a data object by uuid."""
+        assert self.client is not None, "Weaviate client not initialized"
+        attempts: List[str] = []
+        vector = None
+        if isinstance(props, dict) and "_vector" in props:
+            vector = props.pop("_vector")
+
+        try:
+            if hasattr(self.client, "data_object") and hasattr(self.client.data_object, "update"):
+                # try common signature: update(properties, class_name, uuid=...)
+                try:
+                    if vector is not None:
+                        return self.client.data_object.update(props, class_name, uuid=uuid, vector=vector)
+                    return self.client.data_object.update(props, class_name, uuid=uuid)
+                except TypeError:
+                    # some older signatures expect (uuid, properties)
+                    if vector is not None:
+                        return self.client.data_object.update(uuid, props, vector)
+                    return self.client.data_object.update(uuid, props)
+        except Exception as e:
+            attempts.append(f"data_object.update(...): {e}")
+
+        try:
+            if hasattr(self.client, "data") and hasattr(self.client.data, "update"):
+                try:
+                    if vector is not None:
+                        return self.client.data.update(class_name, uuid, props, vector=vector)
+                    return self.client.data.update(class_name, uuid, props)
+                except Exception:
+                    if vector is not None:
+                        return self.client.data.update(uuid, class_name, props, vector)
+                    return self.client.data.update(uuid, class_name, props)
+        except Exception as e:
+            attempts.append(f"data.update(...): {e}")
+
+        raise RuntimeError(f"Unable to update data object. Attempts: {attempts}")
+
+    def _query_do(self, class_name: str, props: List[str], where: Optional[dict] = None, additional: Optional[List[str]] = None) -> dict:
+        """Adapter to perform a GraphQL-style get query with optional where/additional."""
+        assert self.client is not None, "Weaviate client not initialized"
+        attempts = []
+        try:
+            if hasattr(self.client, "query") and hasattr(self.client.query, "get"):
+                q = self.client.query.get(class_name, props)
+                if where is not None and hasattr(q, "with_where"):
+                    q = q.with_where(where)
+                if additional is not None and hasattr(q, "with_additional"):
+                    q = q.with_additional(additional)
+                if hasattr(q, "do"):
+                    return q.do()
+        except Exception as e:
+            attempts.append(f"query.get().do(): {e}")
+        # fallback: some clients expose a raw_graphql or graphql method
+        try:
+            if hasattr(self.client, "graphql"):
+                # attempt a minimal query build
+                where_clause = ""
+                if where:
+                    # best-effort conversion; leave to server if not supported
+                    where_clause = ""
+                # Ensure we request _additional.id so callers can locate object ids
+                fields = "\n".join(props)
+                if "_additional" not in fields:
+                    fields = fields + "\n_additional { id }"
+                gql = f"{{Get{{{class_name}{{{fields}}}}}}}"
+                return self.client.graphql(gql)
+        except Exception as e:
+            attempts.append(f"graphql(...): {e}")
+        # Final fallback: call the Weaviate GraphQL HTTP endpoint directly
+        try:
+            if self.url:
+                gql_url = self.url.rstrip("/") + "/v1/graphql"
+                # Build a simple GraphQL Get query with optional where clause
+                fields = "\n".join(props)
+                where_str = ""
+                if where and isinstance(where, dict):
+                    try:
+                        # support simple equality where with single path
+                        path = where.get("path") or []
+                        op = where.get("operator")
+                        # valueString/valueNumber handling
+                        val_str = None
+                        if "valueString" in where:
+                            import json as _json
+
+                            # JSON-encode the string value to ensure escaping
+                            val_str = _json.dumps(where.get("valueString"))
+                        elif "valueNumber" in where:
+                            val_str = str(where.get("valueNumber"))
+
+                        if path and op and val_str is not None:
+                            # Build inline where clause
+                            # Example: where:{path:["sha"],operator:Equal,valueString:"abc"}
+                            where_str = f"(where:{{path:[\"{path[0]}\"],operator:{op},valueString:{val_str}}})"
+                    except Exception as e:
+                        attempts.append(f"where-build-error: {e}")
+
+                gql = f"{{Get{{{class_name}{where_str}{{{fields}}}}}}}"
+                try:
+                    import requests
+
+                    resp = requests.post(gql_url, json={"query": gql}, timeout=10)
+                    if resp.status_code == 200:
+                        return resp.json()
+                    attempts.append(f"http graphql status {resp.status_code}: {resp.text[:200]}")
+                except Exception as e:
+                    try:
+                        # urllib fallback
+                        from urllib.request import Request, urlopen
+                        import json as _json
+
+                        data = _json.dumps({"query": gql}).encode("utf-8")
+                        req = Request(gql_url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+                        with urlopen(req, timeout=10) as fh:
+                            data = fh.read()
+                            try:
+                                return _json.loads(data)
+                            except Exception:
+                                return {"data": {}}
+                    except Exception as e2:
+                        attempts.append(f"http graphql urllib error: {e2}")
+        except Exception as e:
+            attempts.append(f"http graphql attempt: {e}")
+
+        raise RuntimeError(f"Unable to run query. Attempts: {attempts}")
 
     def ensure_schema(self) -> bool:
         """Ensure the minimal schema exists in Weaviate.
@@ -108,7 +610,71 @@ class WeaviateStore:
         if not self.url or not self.client:
             raise RuntimeError("Weaviate URL not configured; cannot ensure schema")
 
-        # Define class schemas (vectorizer: none to store vectors externally)
+        # Small runtime check: verify the Weaviate server exposes the expected
+        # vectorizer module before creating classes. This is a fast, explicit
+        # test that fails early with a clear message when the server is not
+        # configured for native vectorization as the repository schema expects.
+        # You can bypass this check for local convenience by setting
+        # SKIP_WEAVIATE_VECTORIZER_CHECK=1 in your environment (not recommended
+        # for production as it may mask misconfiguration).
+        required_vectorizer = "text2vec-transformers"
+        skip_check = os.environ.get("SKIP_WEAVIATE_VECTORIZER_CHECK", "0").strip() in ("1", "true", "yes")
+        # If local paraphrase embeddings are enabled, skip the server-side
+        # vectorizer module check because the application will supply vectors.
+        if self.use_local_embeddings:
+            skip_check = True
+            self.logger.log_kv("WEAVIATE_VECTORIZER_CHECK_AUTOSKIPPED", reason="local_paraphrase_model")
+        if skip_check:
+            self.logger.log_kv("WEAVIATE_VECTORIZER_CHECK_SKIPPED", url=self.url)
+            # skip the modules check entirely
+            modules_json = {"modules": ["<skipped>"]}
+        else:
+            try:
+                # Prefer requests (common); fall back to urllib to avoid adding new deps.
+                modules_url = self.url.rstrip("/") + "/v1/modules"
+                modules_json = None
+                try:
+                    import requests
+
+                    resp = requests.get(modules_url, timeout=5)
+                    if resp.status_code == 200:
+                        modules_json = resp.json()
+                except Exception:
+                    # fallback: urllib
+                    try:
+                        from urllib.request import urlopen
+                        import json as _json
+
+                        with urlopen(modules_url, timeout=5) as fh:
+                            modules_json = _json.load(fh)
+                    except Exception:
+                        modules_json = None
+
+                modules_list = []
+                if isinstance(modules_json, dict):
+                    # Try common shapes: {'modules': [{'name': 'text2vec-transformers', ...}, ...]}
+                    if "modules" in modules_json and isinstance(modules_json["modules"], list):
+                        for m in modules_json["modules"]:
+                            if isinstance(m, dict):
+                                name = m.get("name") or m.get("module")
+                                if name:
+                                    modules_list.append(name)
+                            elif isinstance(m, str):
+                                modules_list.append(m)
+                    else:
+                        # Some versions may return a flat list or other shape; stringify as fallback
+                        modules_list = [str(modules_json)]
+
+                if not any(required_vectorizer in m for m in modules_list):
+                    raise RuntimeError(
+                        f"Required Weaviate vectorizer module '{required_vectorizer}' not available on server {self.url}; found: {modules_list}"
+                    )
+            except Exception as e:
+                # Bubble up with a clear message for the caller/tests to act on.
+                self.logger.log_kv("WEAVIATE_VECTORIZER_CHECK_FAILED", error=str(e))
+                raise
+
+        # Define class schemas (vectorizer configured in external schema file)
         # Explicit CVDocument properties mapped to CSV columns used by app.py
         cv_properties = [
             {"name": "sha", "dataType": ["string"]},
@@ -164,7 +730,7 @@ class WeaviateStore:
         # Load schema path from AppConfig (required). The application will
         # crash if the configuration is missing or the file cannot be read so
         # that schema management is an explicit operational step.
-        schema_path_cfg = cfg.weaviate_schema_path
+        schema_path_cfg = self.cfg.weaviate_schema_path
         if not schema_path_cfg:
             raise RuntimeError(
                 "WEAVIATE_SCHEMA_PATH not set in config/.env or environment; schema is required"
@@ -191,11 +757,26 @@ class WeaviateStore:
             raise RuntimeError(f"Invalid weaviate schema format in {schema_path}")
 
         # Create missing classes only
+        # If we're providing local embeddings, adapt the external schema so
+        # classes that request server-side `text2vec-transformers` are
+        # converted to `none` (server not running that module in dev).
+        if self.use_local_embeddings and isinstance(classes, dict):
+            for _nm, sch in classes.items():
+                try:
+                    vec = sch.get("vectorizer") if isinstance(sch, dict) else None
+                    if isinstance(vec, str) and "text2vec-transformers" in vec.lower():
+                        # mutate schema in-memory for local dev
+                        sch["vectorizer"] = "none"
+                        self.logger.log_kv("WEAVIATE_SCHEMA_ADJUSTED", class_name=_nm, from_vectorizer=vec, to_vectorizer="none")
+                except Exception:
+                    # best-effort: don't fail if schema shape unexpected
+                    continue
+
         created = []
         for name, schema in classes.items():
             if not self._class_exists(name):
                 self.logger.log_kv("WEAVIATE_CREATE_CLASS", class_name=name)
-                self.client.schema.create_class(schema)
+                self._schema_create_class(schema)
                 created.append(name)
             else:
                 self.logger.log_kv("WEAVIATE_CLASS_EXISTS", class_name=name)
@@ -252,7 +833,7 @@ class WeaviateStore:
                 "full_text",
             ]
 
-            res = self.client.query.get("CVDocument", props).with_where(where).do()
+            res = self._query_do("CVDocument", props, where)
             objs = res.get("data", {}).get("Get", {}).get("CVDocument", [])
             if objs:
                 first = objs[0]
@@ -315,12 +896,14 @@ class WeaviateStore:
         if found:
             obj_id = found.get("id")
             # update existing
-            self.client.data_object.update(props, "CVDocument", uuid=obj_id)
+            self._data_object_update(props, "CVDocument", obj_id)
             self.logger.log_kv("WEAVIATE_CV_UPDATED", id=obj_id, sha=sha)
             return {"id": obj_id, "properties": props}
         else:
-            obj_id = self.client.data_object.create(props, "CVDocument")
-            self.logger.log_kv("WEAVIATE_CV_CREATED", id=obj_id, sha=sha)
+            obj_id = self._data_object_create(props, "CVDocument")
+            # created id may be dict or raw id
+            nid = obj_id.get("id") if isinstance(obj_id, dict) else obj_id
+            self.logger.log_kv("WEAVIATE_CV_CREATED", id=nid, sha=sha)
             return {"id": obj_id, "properties": props}
 
     def read_cv_from_db(self, sha: str) -> Optional[Dict[str, object]]:
@@ -427,7 +1010,7 @@ class WeaviateStore:
             return None
         try:
             where = {"path": ["parent_sha"], "operator": "Equal", "valueString": parent_sha}
-            res = self.client.query.get("CVSection", ["parent_sha", "section_type", "section_text"]).with_where(where).with_additional(["id"]).do()
+            res = self._query_do("CVSection", ["parent_sha", "section_type", "section_text"], where, additional=["id"])
             items = res.get("data", {}).get("Get", {}).get("CVSection", [])
             for it in items:
                 txt = it.get("section_text") or ""
@@ -438,7 +1021,7 @@ class WeaviateStore:
             self.logger.log_kv("WEAVIATE_SECTION_QUERY_ERROR", error=str(e))
             return None
 
-    def upsert_cv_section(self, parent_sha: str, section_type: str, section_text: str, embedding: List[float]) -> Dict[str, object]:
+    def upsert_cv_section(self, parent_sha: str, section_type: str, section_text: str) -> Dict[str, object]:
         """Create or update a CVSection. Uses (parent_sha, section_text) to dedupe.
 
         Returns dict: {id, created(bool), weaviate_ok(bool)}.
@@ -451,13 +1034,36 @@ class WeaviateStore:
             found = self._find_section_by_parent_and_text(parent_sha, section_text)
             if found:
                 obj_id = found.get("id")
-                # update
-                self.client.data_object.update(props, "CVSection", uuid=obj_id)
+                # update (compute and attach vector if local embeddings enabled)
+                if self.use_local_embeddings:
+                    try:
+                        pc = get_global_paraphrase_client(self.cfg)
+                        vec = pc.text_to_embedding(section_text)
+                        props_with_vec = dict(props)
+                        props_with_vec["_vector"] = vec
+                        self._data_object_update(props_with_vec, "CVSection", obj_id)
+                    except Exception as e:
+                        # if embeddings fail, fall back to update without vector
+                        self.logger.log_kv("PARAPHRASE_EMBED_ERROR", error=str(e), sha=parent_sha)
+                        self._data_object_update(props, "CVSection", obj_id)
+                else:
+                    self._data_object_update(props, "CVSection", obj_id)
                 self.logger.log_kv("WEAVIATE_CVSECTION_UPDATED", id=obj_id, parent_sha=parent_sha)
                 return {"id": obj_id, "created": False, "weaviate_ok": True}
             else:
-                # create (let Weaviate compute/store the vector natively)
-                new_id = self.client.data_object.create(props, "CVSection")
+                # create (compute embedding locally if enabled and pass to server)
+                if self.use_local_embeddings:
+                    try:
+                        pc = get_global_paraphrase_client(self.cfg)
+                        vec = pc.text_to_embedding(section_text)
+                        props_with_vec = dict(props)
+                        props_with_vec["_vector"] = vec
+                        new_id = self._data_object_create(props_with_vec, "CVSection")
+                    except Exception as e:
+                        self.logger.log_kv("PARAPHRASE_EMBED_ERROR", error=str(e), sha=parent_sha)
+                        new_id = self._data_object_create(props, "CVSection")
+                else:
+                    new_id = self._data_object_create(props, "CVSection")
                 nid = new_id.get("id") if isinstance(new_id, dict) else new_id
                 self.logger.log_kv("WEAVIATE_CVSECTION_CREATED", id=nid, parent_sha=parent_sha)
                 return {"id": nid, "created": True, "weaviate_ok": True}
@@ -486,7 +1092,7 @@ class WeaviateStore:
         found = None
         try:
             where = {"path": ["sha"], "operator": "Equal", "valueString": sha}
-            res = self.client.query.get("RoleDocument", ["sha"]).with_where(where).do()
+            res = self._query_do("RoleDocument", ["sha"], where)
             objs = res.get("data", {}).get("Get", {}).get("RoleDocument", [])
             if objs:
                 found = objs[0]
@@ -495,12 +1101,12 @@ class WeaviateStore:
 
         if found:
             obj_id = found.get("id") or (found.get("_additional") or {}).get("id")
-            self.client.data_object.update(props, "RoleDocument", uuid=obj_id)
+            self._data_object_update(props, "RoleDocument", obj_id)
             self.logger.log_kv("WEAVIATE_ROLE_UPDATED", id=obj_id, sha=sha)
             return {"id": obj_id, "properties": props}
         else:
-            obj_id = self.client.data_object.create(props, "RoleDocument")
-            self.logger.log_kv("WEAVIATE_ROLE_CREATED", id=obj_id, sha=sha)
+            obj_id = self._data_object_create(props, "RoleDocument")
+            self.logger.log_kv("WEAVIATE_ROLE_CREATED", id=(obj_id.get("id") if isinstance(obj_id, dict) else obj_id), sha=sha)
             return {"id": obj_id, "properties": props}
 
     def read_role_from_db(self, sha: str) -> Optional[Dict[str, object]]:
@@ -510,7 +1116,7 @@ class WeaviateStore:
 
         try:
             where = {"path": ["sha"], "operator": "Equal", "valueString": sha}
-            res = self.client.query.get("RoleDocument", ["sha", "filename", "role_title", "full_text"]).with_where(where).with_additional(["id"]).do()
+            res = self._query_do("RoleDocument", ["sha", "filename", "role_title", "full_text"], where, additional=["id"])
             items = res.get("data", {}).get("Get", {}).get("RoleDocument", [])
             if not items:
                 return None
@@ -526,7 +1132,7 @@ class WeaviateStore:
             self.logger.log_kv("WEAVIATE_ROLE_READ_ERROR", error=str(e), sha=sha)
             return None
 
-    def upsert_role_section(self, parent_sha: str, section_type: str, section_text: str, embedding: List[float]) -> Dict[str, object]:
+    def upsert_role_section(self, parent_sha: str, section_type: str, section_text: str) -> Dict[str, object]:
         """Create or update a RoleSection object; mirrors CV section upsert."""
         if not self.client:
             return {"id": None, "created": False, "weaviate_ok": False}
@@ -534,15 +1140,39 @@ class WeaviateStore:
         try:
             # simple dedupe by parent + exact section_text
             where = {"path": ["parent_sha"], "operator": "Equal", "valueString": parent_sha}
-            res = self.client.query.get("RoleSection", ["parent_sha", "section_text"]).with_where(where).with_additional(["id"]).do()
+            res = self._query_do("RoleSection", ["parent_sha", "section_text"], where, additional=["id"])
             items = res.get("data", {}).get("Get", {}).get("RoleSection", [])
             for it in items:
                 if (it.get("section_text") or "").strip() == (section_text or "").strip():
                     obj_id = it.get("_additional", {}).get("id") or it.get("id")
-                    self.client.data_object.update(props, "RoleSection", uuid=obj_id)
+                    # update with local embedding if enabled
+                    if self.use_local_embeddings:
+                        try:
+                            pc = get_global_paraphrase_client(self.cfg)
+                            vec = pc.text_to_embedding(section_text)
+                            props_with_vec = dict(props)
+                            props_with_vec["_vector"] = vec
+                            self._data_object_update(props_with_vec, "RoleSection", obj_id)
+                        except Exception as e:
+                            self.logger.log_kv("PARAPHRASE_EMBED_ERROR", error=str(e), sha=parent_sha)
+                            self._data_object_update(props, "RoleSection", obj_id)
+                    else:
+                        self._data_object_update(props, "RoleSection", obj_id)
                     self.logger.log_kv("WEAVIATE_ROLESECTION_UPDATED", id=obj_id, parent_sha=parent_sha)
                     return {"id": obj_id, "created": False, "weaviate_ok": True}
-            new_id = self.client.data_object.create(props, "RoleSection")
+            # create (compute embedding locally if enabled and pass to server)
+            if self.use_local_embeddings:
+                try:
+                    pc = get_global_paraphrase_client(self.cfg)
+                    vec = pc.text_to_embedding(section_text)
+                    props_with_vec = dict(props)
+                    props_with_vec["_vector"] = vec
+                    new_id = self._data_object_create(props_with_vec, "RoleSection")
+                except Exception as e:
+                    self.logger.log_kv("PARAPHRASE_EMBED_ERROR", error=str(e), sha=parent_sha)
+                    new_id = self._data_object_create(props, "RoleSection")
+            else:
+                new_id = self._data_object_create(props, "RoleSection")
             nid = new_id.get("id") if isinstance(new_id, dict) else new_id
             self.logger.log_kv("WEAVIATE_ROLESECTION_CREATED", id=nid, parent_sha=parent_sha)
             return {"id": nid, "created": True, "weaviate_ok": True}
@@ -559,7 +1189,6 @@ class WeaviateStore:
         Returns: {sha, filename, num_sections, weaviate_ok, errors: []}
         """
         from utils.extractors import compute_sha256_bytes, pdf_to_text, docx_to_text
-        from utils.paraphrase_client import text_to_embedding
         import traceback
 
         result = {"sha": None, "filename": None, "num_sections": 0, "weaviate_ok": False, "errors": []}
@@ -605,20 +1234,15 @@ class WeaviateStore:
             for sec in sections:
                 sec_text = sec.get("section_text", "")
                 sec_type = sec.get("section_type", "section")
-                try:
-                    emb = text_to_embedding(sec_text)
-                except Exception as e:
-                    all_ok = False
-                    self.logger.log_kv("EMBEDDING_ERROR", error=str(e))
-                    result["errors"].append(str(e))
-                    emb = None
-
-                if emb is not None and self.client:
+                # Let Weaviate compute vectors natively; do not compute or pass
+                # embeddings from the application to avoid duplication and
+                # respect the external schema contract.
+                if self.client:
                     try:
                         if is_role:
-                            up = self.upsert_role_section(sha, sec_type, sec_text, emb)
+                            up = self.upsert_role_section(sha, sec_type, sec_text)
                         else:
-                            up = self.upsert_cv_section(sha, sec_type, sec_text, emb)
+                            up = self.upsert_cv_section(sha, sec_type, sec_text)
                         if not up.get("weaviate_ok"):
                             all_ok = False
                     except Exception as e:

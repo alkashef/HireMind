@@ -38,7 +38,7 @@
     },
     "CVSection": {
       "class": "CVSection",
-      "vectorizer": "text2vec-transformers",
+      "vectorizer": "none",
       "properties": [
         {"name": "parent_sha", "dataType": ["string"]},
         {"name": "section_type", "dataType": ["string"]},
@@ -58,7 +58,7 @@
     },
     "RoleSection": {
       "class": "RoleSection",
-      "vectorizer": "text2vec-transformers",
+      "vectorizer": "none",
       "properties": [
         {"name": "parent_sha", "dataType": ["string"]},
         {"name": "section_type", "dataType": ["string"]},

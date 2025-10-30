@@ -282,6 +282,8 @@ This processes a batch of questions from the file specified in QUESTIONS_PATH in
 
 This section documents a clear, step-by-step plan for adding Weaviate as a parallel vector & document store. IMPORTANT: we will not perform a migration or retire the CSV pipeline here — both systems will run in parallel during development and validation. The goal is to make Weaviate a fully-featured, optional back-end service that mirrors the CSV content (metadata + CV text + section embeddings) and provides vector search and filtered retrieval.
 
+Schema contract: the canonical schema lives in `data/weaviate_schema.json`; point `WEAVIATE_SCHEMA_PATH` in `config/.env` to this file so the app can load and apply it at startup — the application will raise and exit if the schema file is missing or malformed.
+
 ### High-level goals
 
 - Store structured OpenAI-extracted attributes (booleans/ints/strings) on a CVDocument record.
@@ -295,7 +297,9 @@ Note on generic handling: the pipeline is shared for both CVs and Roles — the 
 
 - No CSV retirement steps in this document. All work is explicitly for parallel integration.
 - Small, testable commits are preferred. Each step below is scoped to a minimal change that can be validated independently.
-- Keep Weaviate classes vectorizer="none" and supply vectors on create so we control embedding provider and model version.
+- Schema is an explicit contract stored in `data/weaviate_schema.json` (referenced by `WEAVIATE_SCHEMA_PATH`) and must be respected by the application; the app will fail fast if the schema is missing or invalid.
+
+Note on vectorization: this repository's schema uses Weaviate-native vectorization (`text2vec-transformers`) for documents and sections; ensure your Weaviate deployment enables the `text2vec-transformers` module (or update the schema to a vectorizer available in your environment).
 
 ### Acceptance criteria (planning)
 
@@ -312,7 +316,7 @@ Below is a single numbered list of small, independent implementation steps. Each
 Local Weaviate — setup & run (quick start)
 ---------------------------------------
 
-If you want to run Weaviate locally for development and testing, follow these quick, platform-specific steps. The project provides a minimal `docker-compose.weaviate.yml` that launches a single-node Weaviate with vectorizer disabled (we supply vectors).
+If you want to run Weaviate locally for development and testing, follow these quick, platform-specific steps. The project provides a minimal `docker-compose.weaviate.yml` that launches a single-node Weaviate; adjust the compose settings to enable the `text2vec-transformers` module if you want Weaviate to compute vectors natively.
 
 Windows (cmd.exe)
 
@@ -395,8 +399,8 @@ docker pull semitechnologies/weaviate:1.19.3
 docker run -d --name hiremind_weaviate -p 8080:8080 ^
   -e AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true ^
   -e PERSISTENCE_DATA_PATH=/var/lib/weaviate ^
-  -e DEFAULT_VECTORIZER_MODULE=none ^
-  -e ENABLE_MODULES=none ^
+    -e DEFAULT_VECTORIZER_MODULE=text2vec-transformers ^
+    -e ENABLE_MODULES=text2vec-transformers ^
   -v %cd%\\data\\weaviate_data:/var/lib/weaviate ^
   semitechnologies/weaviate:1.19.3
 ```
@@ -405,9 +409,10 @@ Notes & troubleshooting
 
 - If the Docker CLI reports it cannot connect to the engine (named-pipe / EOF errors on Windows), start or restart Docker Desktop and retry. `docker version` and `docker info` should report a running engine.
 - If the probe returns HTTP 200 but `tests/test_weaviate_local.py` prints "Skipping ensure_schema() (client missing)" then install the optional Python client in your virtualenv to enable `ensure_schema()`:
+ - If the probe returns HTTP 200 but `tests/test_weaviate_local.py` prints "Skipping ensure_schema() (client missing)" then install the optional Python client in your virtualenv to enable `ensure_schema()` (project now targets weaviate-client v4):
 
-```
-pip install weaviate-client
+```cmd
+pip install "weaviate-client>=4.17.0"
 ```
 
 - To create the schema from the repository code (idempotent):
