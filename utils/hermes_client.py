@@ -184,25 +184,76 @@ class HermesClient:
             pass  # fallback: let HF handle device placement if possible
 
         out = self.model.generate(**inputs, **gen_opts)
+        # HuggingFace `generate` returns sequences that include the input prompt
+        # followed by newly generated tokens. Decode only the newly generated
+        # portion to avoid returning the original prompt text (which looks like
+        # an echoed prompt in extraction use-cases).
+        try:
+            input_ids = inputs.get("input_ids")
+            if input_ids is not None:
+                prompt_len = input_ids.shape[-1]
+                # out[0] is a 1-D tensor of token ids for the full sequence
+                gen_ids = out[0][prompt_len:]
+                if gen_ids.shape[0] == 0:
+                    return ""
+                text = self.tokenizer.decode(gen_ids, skip_special_tokens=True)
+                return text
+        except Exception:
+            # Fall back to decoding the entire sequence if anything goes wrong
+            pass
+
+        # Generic fallback
         text = self.tokenizer.decode(out[0], skip_special_tokens=True)
         return text
 
-    def generate_from_prompt_file(self, prompt_name: str, prompt_vars: dict | None = None, **generate_kwargs) -> str:
-        """Load a prompt template from `prompts/<prompt_name>` and generate.
+    def generate_from_prompt_file(self, prompt_name: str, prompt_vars: dict | None = None, preview_only: bool = False, **generate_kwargs) -> str:
+        """Load a prompt template from `prompts/<prompt_name>`, format it, and generate.
 
-    - prompt_name: filename inside `prompts/` (e.g., 'extract_from_cv_user.md')
-        - prompt_vars: optional dict used to format the prompt with str.format()
+        - prompt_name: filename inside `prompts/` (e.g., 'extract_from_cv_user.md')
+        - prompt_vars: optional dict used to safely interpolate template fields
+        - preview_only: if True, return the formatted prompt string without calling the model
         """
         prompts_dir = Path(__file__).resolve().parents[1] / "prompts"
         prompt_path = prompts_dir / prompt_name
         if not prompt_path.exists():
             raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
         text = prompt_path.read_text(encoding="utf-8")
+        # Safely interpolate prompt_vars into the template without using
+        # str.format directly, because many prompt templates contain JSON
+        # braces and sample schemas which would cause KeyError/ValueError
+        # during formatting. We only substitute simple top-level fields
+        # present in prompt_vars and leave other braces intact.
         if prompt_vars:
             try:
-                text = text.format(**prompt_vars)
+                import string
+
+                def _safe_format(t: str, vars: dict) -> str:
+                    f = string.Formatter()
+                    out_parts: list[str] = []
+                    for literal_text, field_name, format_spec, conversion in f.parse(t):
+                        if literal_text:
+                            out_parts.append(literal_text)
+                        if field_name is None:
+                            continue
+                        # Only substitute simple field names that exist in vars
+                        if field_name in vars:
+                            out_parts.append(str(vars[field_name]))
+                        else:
+                            # Re-emit the original field placeholder unchanged
+                            # so JSON/text in prompts is preserved.
+                            if format_spec:
+                                out_parts.append("{" + field_name + ":" + format_spec + "}")
+                            else:
+                                out_parts.append("{" + field_name + "}")
+                    return "".join(out_parts)
+
+                text = _safe_format(text, prompt_vars)
             except Exception as exc:
                 raise ValueError(f"Failed to format prompt template: {exc}")
+        # If caller only wants to preview the formatted prompt, return it
+        if preview_only:
+            return text
+
         return self.generate(text, **generate_kwargs)
 
 
