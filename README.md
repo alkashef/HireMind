@@ -30,6 +30,8 @@ Note: the extraction pipeline is intentionally generic — it applies to both CV
  - `utils/csv_manager.py` – CSVStore and RolesStore encapsulating read/write of `data/applicants.csv` and `data/roles.csv`
 - `utils/openai_manager.py` – encapsulates OpenAI SDK + HTTP fallback (vector stores, file_search, text.format)
  - `prompts/` – prompt templates used by the OpenAI extraction flow (e.g., `extract_from_cv_system.md`, `extract_from_cv_user.md`)
+ - `prompts/` – prompt templates used by the OpenAI extraction flow (e.g., `extract_from_cv_system.md`, `extract_from_cv_user.md`)
+ - `prompts/field_hints.json` – concise per-field guidance used by the Hermes per-field extraction prompt/tests
 - `config/.env` – runtime configuration (mirrored by `config/.env-example`)
 - `config/settings.py` – central AppConfig loader for environment and paths
 - `utils/logger.py` – AppLogger writing to `LOG_FILE_PATH` with [TIMESTAMP] and kv helper
@@ -189,6 +191,7 @@ python -m pytest -q
 python -m pytest tests/test_gpu.py -q          # GPU probe and torch checks
 python -m pytest tests/test_weaviate_local.py -q  # Weaviate probe (if running locally)
 python -m pytest tests/test_extractors_local.py -q
+python -m pytest tests/test_hermes_field_extraction.py -q  # Per-field Hermes extraction using prompts/field_hints.json
 ```
 
 Notes:
@@ -258,7 +261,9 @@ Processes the batch file specified by `QUESTIONS_PATH` in `config/.env` and writ
     commits.
 - Safe cleaning: `scripts/clear_cache.py` will skip anything inside
     `models/` and `data/` to avoid accidental deletion of model artifacts or
-    user data. Use `--dry-run` to preview deletions.
+    user data. It will also never delete the canonical resume fixtures in
+    `tests/data/` (the OpenAI JSON and the PDF). Use `--dry-run` to preview
+    deletions.
 - Configuration: use `config/.env` (local) and keep `config/.env-example` as
     the template for required and optional environment variables.
  - Developer GPU guidance: for reproducible developer setups we recommend

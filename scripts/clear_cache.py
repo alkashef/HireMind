@@ -35,8 +35,22 @@ def find_cache_files(base_path: Path) -> List[Path]:
     }
     
     to_delete: List[Path] = []
+
+    # Absolute paths that must never be deleted by this cleaner (explicit fixtures)
+    # Keep these guards even if other patterns or directories are added later.
+    skip_always = {
+        (base_path / "tests" / "data" / "Ahmad Alkashef - Resume - OpenAI.json").resolve(),
+        (base_path / "tests" / "data" / "Ahmad Alkashef - Resume.pdf").resolve(),
+    }
     
     for path in base_path.rglob("*"):
+        # Never delete protected fixture files
+        try:
+            if path.resolve() in skip_always:
+                continue
+        except Exception:
+            # If resolve() fails for any reason, fall through to other guards
+            pass
         # Always skip anything inside `models/` or `data/` directories to avoid accidental deletions
         # This ensures the script will not remove model artifacts or user data.
         if any(p in ("models", "data") for p in path.parts):
@@ -57,6 +71,12 @@ def find_cache_files(base_path: Path) -> List[Path]:
             # Skip if child is the project `models` or `data` directories by mistake
             if any(p in ("models", "data") for p in child.parts):
                 continue
+            # Also protect explicit fixtures even if someone points logs/ there by mistake
+            try:
+                if child.resolve() in skip_always:
+                    continue
+            except Exception:
+                pass
             to_delete.append(child)
 
     return to_delete

@@ -43,18 +43,20 @@ def test_hermes_extract_basic_fields():
     fixture = Path(__file__).resolve().parents[0] / "data" / "Ahmad Alkashef - Resume - OpenAI.json"
     assert fixture.exists(), f"Fixture not found: {fixture}"
 
+    # Extract CV text for prompting
     cv_text = load_cv_text_from_openai_fixture(fixture)
     assert isinstance(cv_text, str) and len(cv_text.strip()) > 0
 
     # Lazy import/usage of Hermes — skip if model/deps aren't available
     try:
-        from utils.hermes_client import HermesClient
+        from utils.hermes_client import HermesClient, get_global_client
         from config.settings import AppConfig
     except Exception as exc:
         pytest.skip(f"Hermes client not importable: {exc}")
 
     cfg = AppConfig()
-    client = HermesClient(model_dir=cfg.hermes_model_dir, quantize_4bit=cfg.hermes_quantize_4bit, cfg=cfg)
+    # Reuse a single global client so the model loads once and is reused across fields
+    client = get_global_client(model_dir=cfg.hermes_model_dir, quantize_4bit=cfg.hermes_quantize_4bit)
 
     # Load structured field hints from prompts/field_hints.json so tests and prompts share
     # the same authoritative hint text.
@@ -64,13 +66,63 @@ def test_hermes_extract_basic_fields():
     except Exception:
         field_hints_map = {}
 
+    # Embedded expected values (copied from the authoritative OpenAI-backed fixture)
     expected = {
         "first_name": "Ahmad",
         "last_name": "Alkashef",
         "full_name": "Ahmad Alkashef",
         "email": "alkashef@gmail.com",
         "phone": "+20-100-506-2208",
+        "misspelling_count": 0,
+        "misspelled_words": "",
+        "visual_cleanliness": 0,
+        "professional_look": 0,
+        "formatting_consistency": 0,
+        "years_since_graduation": 15,
+        "total_years_experience": 24,
+        "employer_names": "Teradata, Microsoft, Schlumberger, Infineon, Mentor Graphics",
+        "employers_count": 5,
+        "avg_years_per_employer": 4.8,
+        "years_at_current_employer": 6,
+        "address": "Cairo",
+        "alma_mater": "Ain Shams University",
+        "high_school": "",
+        "education_system": "Bachelor's and Master's",
+        "second_foreign_language": "",
+        "flag_stem_degree": "Yes",
+        "military_service_status": "Unknown",
+        "worked_at_financial_institution": "No",
+        "worked_for_egyptian_government": "Yes",
     }
+
+    # Full field list (mirrors prompts/extract_from_cv_user.md schema example)
+    all_fields = [
+        "first_name",
+        "last_name",
+        "full_name",
+        "email",
+        "phone",
+        "misspelling_count",
+        "misspelled_words",
+        "visual_cleanliness",
+        "professional_look",
+        "formatting_consistency",
+        "years_since_graduation",
+        "total_years_experience",
+        "employer_names",
+        "employers_count",
+        "avg_years_per_employer",
+        "years_at_current_employer",
+        "address",
+        "alma_mater",
+        "high_school",
+        "education_system",
+        "second_foreign_language",
+        "flag_stem_degree",
+        "military_service_status",
+        "worked_at_financial_institution",
+        "worked_for_egyptian_government",
+    ]
 
     def is_valid_output(s: str, cv_sample: str) -> bool:
         """Return True if s looks like a valid extracted value (not a prompt echo).
@@ -142,18 +194,7 @@ def test_hermes_extract_basic_fields():
         # Fallback: return first attempt trimmed (may fail the assertion below)
         return (out2 or out or "").strip()
 
-    # Only test first_name explicitly (keeps test focused and stable)
-    field = "first_name"
-    want = expected[field]
-
-    got = extract_with_retry(field)
-    # If the model echoed the prompt template, skip the test to avoid CI breakage
-    if got and "Return only the value" in got:
-        pytest.skip("Hermes returned prompt template text instead of extraction; skip and re-run when templates fixed")
-
-    # Provide graceful failure reporting: don't dump the CV/prompt, truncate long outputs,
-    # and include a small per-field hint (loaded from prompts/field_hints.json) and suggested
-    # normalization so failures are actionable.
+    # Helpers for graceful failure reporting and normalization
     def _truncate(s: str, n: int = 120) -> str:
         if s is None:
             return ""
@@ -165,34 +206,113 @@ def test_hermes_extract_basic_fields():
             return ""
         s = s.strip()
         if field_name == "first_name":
-            # remove trailing punctuation and take the first token
             s = s.rstrip(".,;:")
             parts = [p for p in s.split() if p]
             return parts[0] if parts else s
         if field_name == "last_name":
-            s = s.strip().rstrip(".,;:")
-            return s
+            return s.rstrip(".,;:")
         if field_name == "email":
             return s.lower()
         if field_name == "phone":
-            return s.replace(" ", "").replace("-", "-")
+            return s.strip()
         return s
+
+    def _is_numeric_like(s: str) -> bool:
+        if s is None:
+            return False
+        t = s.strip()
+        if t == "":
+            return True  # allow empty as "missing"
+        try:
+            float(t)
+            return True
+        except Exception:
+            return False
+
+    def _to_float_or_none(s: str):
+        try:
+            return float(s.strip())
+        except Exception:
+            return None
+
+    # Validate all fields: exact matches for core fields; format/type checks for the rest.
+    numeric_fields = {
+        "misspelling_count",
+        "visual_cleanliness",
+        "professional_look",
+        "formatting_consistency",
+        "years_since_graduation",
+        "total_years_experience",
+        "employers_count",
+        "avg_years_per_employer",
+        "years_at_current_employer",
+    }
 
     # Use the external hints mapping when producing failure messages
     field_hints = field_hints_map
 
-    got_display = _truncate(got or "")
-    normalized_got = _normalize_for_assert(field, got or "")
-    normalized_want = _normalize_for_assert(field, want or "")
+    for field in all_fields:
+        want = expected.get(field, None)
+        got = extract_with_retry(field)
+        if got and "Return only the value" in got:
+            pytest.skip("Hermes returned prompt template text instead of extraction; skip and re-run when templates fixed")
 
-    if normalized_got != normalized_want:
-        hint = field_hints.get(field, "Return the requested information exactly as a single short line.")
-        msg = (
-            f"Field '{field}' mismatch:\n"
-            f"  expected: '{want}'\n"
-            f"  got (raw, truncated): '{got_display}'\n"
-            f"  suggested normalized got: '{normalized_got}'\n"
-            f"  hint: {hint}\n"
-            f"  Note: test avoids printing CV/prompt contents for privacy/verbosity."
-        )
-        pytest.fail(msg)
+        got_display = _truncate(got or "")
+        norm_got = _normalize_for_assert(field, got or "")
+        norm_want = _normalize_for_assert(field, want or "") if want is not None else None
+
+        if field in expected:
+            # For numeric fields compare numerically with small tolerance; otherwise exact (after normalization)
+            if field in numeric_fields:
+                want_val = expected.get(field, None)
+                got_num = _to_float_or_none(norm_got)
+                if want_val is None:
+                    want_num = None
+                else:
+                    # want is likely a number in JSON (int/float)
+                    try:
+                        want_num = float(want_val)
+                    except Exception:
+                        want_num = None
+                ok = False
+                if want_num is None:
+                    ok = (got_num is None) or (norm_got == "")
+                else:
+                    ok = got_num is not None and abs(got_num - want_num) <= 1e-2
+                if not ok:
+                    hint = field_hints.get(field, "Return a single numeric value only.")
+                    pytest.fail(
+                        f"Field '{field}' numeric mismatch:\n"
+                        f"  expected: {want_val}\n"
+                        f"  got (raw, truncated): '{got_display}'\n"
+                        f"  parsed got: {got_num}\n"
+                        f"  hint: {hint}"
+                    )
+            else:
+                if norm_got != norm_want:
+                    hint = field_hints.get(field, "Return the requested information exactly as a single short line.")
+                    pytest.fail(
+                        f"Field '{field}' mismatch:\n"
+                        f"  expected: '{expected.get(field, '')}'\n"
+                        f"  got (raw, truncated): '{got_display}'\n"
+                        f"  suggested normalized got: '{norm_got}'\n"
+                        f"  hint: {hint}\n"
+                        f"  Note: test avoids printing CV/prompt contents for privacy/verbosity."
+                    )
+        elif field in numeric_fields:
+            if not _is_numeric_like(norm_got):
+                hint = field_hints.get(field, "Return a single numeric value or empty if missing.")
+                pytest.fail(
+                    f"Field '{field}' should be numeric-like or empty:\n"
+                    f"  got (raw, truncated): '{got_display}'\n"
+                    f"  hint: {hint}"
+                )
+        else:
+            # General string fields: must be single-line, not too long, not JSON-like (is_valid_output covers it)
+            if not is_valid_output(norm_got, cv_text):
+                hint = field_hints.get(field, "Return the requested information exactly as a single short line.")
+                pytest.fail(
+                    f"Field '{field}' invalid format/content:\n"
+                    f"  got (raw, truncated): '{got_display}'\n"
+                    f"  hint: {hint}"
+                )
