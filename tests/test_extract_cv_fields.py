@@ -3,11 +3,11 @@
 
 - Loads CV text and expected values from the canonical fixture.
 - Uses the OpenAI API to produce a full JSON extraction.
-- Prints a clean table to stdout and writes a Markdown table to tests/data/hermes_field_extraction_report.md.
+- Prints a clean table to stdout and writes a Markdown table to TEST_RESULTS/extract_fields_openai.md.
 - Suppresses warnings; catches errors and prints friendly messages.
 
 Run (Windows cmd.exe):
-    python tests\test_hermes_extract_fields.py
+    python tests\test_extract_cv_fields.py
 """
 from __future__ import annotations
 

@@ -23,7 +23,7 @@
 - Do NOT create tests or test files unless explicitly requested by the user; do not add tests without a direct prompt.
 - Do **NOT** implement fallbacks.
 - Use a logger to log all details to the file specified in `LOG_FILE_PATH` from the `.env` file. Precede each log entry with a `[TIMESTAMP]` using the local computer clock.
-- Do NOT hardcode prompt templates or prompt text inside source files, tests, or scripts. Place all prompt templates in the repository `prompts/` folder and load them at runtime (e.g., `generate_from_prompt_file()` in `utils.hermes_client`).
+- Do NOT hardcode prompt templates or prompt text inside source files, tests, or scripts. Place all prompt templates in the repository `prompts/` folder and load them at runtime.
 
 ## Development Approach
 - Code is experimental and iterative; designs change frequently.

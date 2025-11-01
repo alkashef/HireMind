@@ -76,99 +76,15 @@ conda install pip
 pip install -r requirements.txt
 ```
 
-#### GPU Configuration (recommended: CUDA 12.6 / cu126)
+#### GPU Configuration
 
-1. Install NVIDIA driver appropriate for your GPU (use NVIDIA site or
-     your package manager). Verify with `nvidia-smi`.
-2. Install the CUDA toolkit and cuDNN (follow NVIDIA instructions).
-3. Install PyTorch with a matching CUDA wheel. The project recommends CUDA
-     12.6 (cu126) for reproducible developer and CI setups. Two options:
-
-```cmd
-# Option A: use the helper (prints and can run the install)
-python scripts\download_cuda.py --cuda 12.6
-
-# Option B: run pip directly (uses the index URL for cu126)
-pip uninstall torch torchvision torchaudio -y
-pip install torch --index-url https://download.pytorch.org/whl/cu126
-```
-
-4. Verify the CUDA-enabled torch install:
-
-```cmd
-python -c "import torch; print('torch:', torch.__version__); print('torch.cuda.is_available():', torch.cuda.is_available()); print('torch.version.cuda:', torch.version.cuda); print('device_count:', torch.cuda.device_count()); print('device_name:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no device')"
-```
-
-Notes:
-- If you cannot use CUDA on your machine, a CPU-only `torch` install is
-    supported but some local model tests will be skipped or slower.
+Local GPU/LLM setup has been removed. The project uses OpenAI APIs; no CUDA/PyTorch is required.
 
 #### Download Models
 
-The project uses local models for embeddings and (optionally) LLM inference.
-Use the included scripts to download them into `models/`.
+Local model downloads are no longer needed. Extraction and embeddings run via OpenAI APIs.
 
-- Paraphrase embeddings (sentence-transformers):
-
-```cmd
-python scripts\download_paraphrase.py
-```
-
-- Hermes / Nous models (GGUF / HF):
-
-```cmd
-python scripts\download_nous-hermes.py
-```
-
-Set `HF_HUB_OFFLINE=1` (or `set HF_HUB_OFFLINE=1` on Windows) to force
-offline usage of cached Hugging Face files once downloaded.
-
-### Quick GPU env setup and test (Windows cmd)
-
-If you want a minimal, repeatable sequence to get a CUDA-enabled dev env and run the Hermes smoke test, follow these steps on Windows (cmd.exe). This lists the essential steps we use during development and CI validation.
-
-1) Install NVIDIA drivers
-
-    - Download and install the latest NVIDIA driver for your GPU from https://www.nvidia.com/Download/index.aspx. Reboot if prompted.
-    - Verify drivers are installed with:
-
-```cmd
-nvidia-smi
-```
-
-2) Install CUDA toolkit (matching recommended runtime)
-
-    - Install the CUDA toolkit that matches the project's recommended runtime (CUDA 12.6 / cu126) from https://developer.nvidia.com/cuda-toolkit. Follow NVIDIA's installer instructions for Windows.
-    - After install, verify with `nvidia-smi` and by checking `torch` once installed (see step 4).
-
-3) Create and activate the Conda environment
-
-```cmd
-conda create --name hiremind python=3.11 -y
-conda activate hiremind
-```
-
-4) Install Python dependencies
-
-```cmd
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-5) Run the Hermes smoke test (FP16 + optional 4-bit)
-
-```cmd
-# run the single Hermes smoke test (fast, focused)
-pytest -q tests/test_hermes_local.py
-
-# or run directly with python (useful for quick manual runs)
-python tests/test_hermes_local.py
-```
-
-Notes:
-- If your GPU has limited VRAM (e.g., ~8GB), the 4-bit (BitsAndBytes) load may be skipped by the test — FP16 is still validated. The test contains a fallback that attempts CPU offload for 4-bit quantization and will `skip` if the local hardware cannot place parameters on CUDA.
-- If you need reliable 4-bit testing, run on a machine with more GPU RAM or use a cloud VM with a larger GPU.
- - If the Hermes per-field test is being skipped on Windows/CPU-only, disable 4-bit quantization by setting `HERMES_QUANTIZE_4BIT=false` in `config/.env` (or `.env-example` then copy to `.env`). On CPU, the Hermes client loads with FP32 by default.
+ 
 
 #### Data and CSV
 
@@ -188,19 +104,17 @@ python -m pytest -q
 - Run specific tests (fast probes):
 
 ```cmd
-python -m pytest tests/test_gpu.py -q          # GPU probe and torch checks
 python -m pytest tests/test_weaviate_local.py -q  # Weaviate probe (if running locally)
 python -m pytest tests/test_extractors_local.py -q
-REM Deprecated: use the standalone report instead (this pytest test is now skipped)
-REM python -m pytest tests/test_hermes_field_extraction.py -q  # (skipped) Per-field Hermes extraction
+```
 
 OpenAI extraction report (standalone; env-driven)
-------------------------------------------------
+-------------------------------------------------
 
 Prefer a plain Python script that prints a clean table (no pytest noise)? Run:
 
 ```cmd
-python tests\test_hermes_extract_fields.py
+python tests\test_extract_cv_fields.py
 ```
 
 Notes:
@@ -214,18 +128,10 @@ Notes:
 - Makes a single OpenAI Responses API call to extract all fields as a JSON object.
 - Shows total inference time (seconds) per row and writes Markdown to `%TEST_RESULTS%\extract_fields_openai.md`.
 
-Troubleshooting Hermes test skips
----------------------------------
-
-If you see the Hermes per-field test reported as `skipped`:
-
-- Ensure dependencies are installed: `transformers`, `torch` (CPU or CUDA), and optionally `bitsandbytes` if you want 4-bit quantization.
-- On Windows or CPU-only setups, set `HERMES_QUANTIZE_4BIT=false` in `config/.env` to avoid requiring `bitsandbytes`.
-- Re-run with reasons shown: `python -m pytest -rs tests/test_hermes_field_extraction.py`.
-```
+Tip: A cleaned, OpenAI-only reference file is provided at `tests\ref\Ahmad Alkashef - Resume - OpenAI.cleaned.json`; set `TEST_CV_REF_JSON` to this path in `config/.env` to compare against it.
 
 Notes:
-- Some tests require optional packages or model files (e.g., `sentence-transformers`, `torch` with CUDA, Hermes models). The tests are written to skip with helpful messages when prerequisites are missing.
+- The project is OpenAI-only and does not require local model packages.
 - Prefer running tests in the project's virtual environment (`conda activate hiremind`).
 
 Environment sourcing for tests
@@ -296,12 +202,7 @@ Processes the batch file specified by `QUESTIONS_PATH` in `config/.env` and writ
     deletions.
 - Configuration: use `config/.env` (local) and keep `config/.env-example` as
     the template for required and optional environment variables.
- - Developer GPU guidance: for reproducible developer setups we recommend
-   using CUDA 12.6 (package tag `cu126`) as the canonical dev CUDA runtime.
-   The repository's `requirements.txt` includes an extra-index-url for `cu126`
-   and `scripts/download_cuda.py --cuda 12.6` prints a matching `pip install`
-   command. If you want GPU-enabled `torch`, install the wheel for `cu126` to
-   match CI/dev expectations and local tests.
+
 
 ## Batch Mode
 

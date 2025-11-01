@@ -41,7 +41,8 @@ from config.settings import AppConfig
 from utils.logger import AppLogger
 from pathlib import Path
 from typing import List
-from utils.paraphrase_client import get_global_paraphrase_client
+# Local embeddings via sentence-transformers/paraphrase were removed. The
+# application now relies solely on OpenAI and/or Weaviate-native vectorizers.
 
 # Import weaviate client at module level intentionally: if the dependency is
 # missing the import will raise and the calling code/test can decide how to
@@ -97,20 +98,8 @@ class WeaviateStore:
                 self.logger.log_kv("WEAVIATE_CLIENT_INIT_FAILED", error=str(e))
                 raise
 
-        # Local paraphrase embeddings: detect if a local paraphrase model is
-        # available and enable embedding-on-application-side if so. The
-        # environment variable USE_LOCAL_EMBEDDINGS=1 can also force this.
+        # Local paraphrase embeddings support removed; always use server-side vectorization
         self.use_local_embeddings = False
-        try:
-            use_env = os.environ.get("USE_LOCAL_EMBEDDINGS", "").strip().lower() in ("1", "true", "yes")
-            model_dir = Path(self.cfg.paraphrase_model_dir)
-            if use_env or (model_dir.exists() and any(model_dir.iterdir())):
-                # don't raise here; only enable and lazy-load when needed
-                self.use_local_embeddings = True
-                self.logger.log_kv("PARAPHRASE_EMBEDDINGS_ENABLED", model_dir=str(model_dir), via_env=use_env)
-        except Exception:
-            # best-effort detection: if something goes wrong, leave disabled
-            self.use_local_embeddings = False
 
     def _build_client(self, additional_headers: Optional[dict]) -> object:
         """Attempt multiple client construction patterns to support v3 and v4.
@@ -621,11 +610,7 @@ class WeaviateStore:
         # for production as it may mask misconfiguration).
         required_vectorizer = "text2vec-transformers"
         skip_check = os.environ.get("SKIP_WEAVIATE_VECTORIZER_CHECK", "0").strip() in ("1", "true", "yes")
-        # If local paraphrase embeddings are enabled, skip the server-side
-        # vectorizer module check because the application will supply vectors.
-        if self.use_local_embeddings:
-            skip_check = True
-            self.logger.log_kv("WEAVIATE_VECTORIZER_CHECK_AUTOSKIPPED", reason="local_paraphrase_model")
+        # Application no longer supplies local vectors; keep server check unless explicitly skipped
         if skip_check:
             self.logger.log_kv("WEAVIATE_VECTORIZER_CHECK_SKIPPED", url=self.url)
             # skip the modules check entirely
@@ -759,20 +744,6 @@ class WeaviateStore:
             raise RuntimeError(f"Invalid weaviate schema format in {schema_path}")
 
         # Create missing classes only
-        # If we're providing local embeddings, adapt the external schema so
-        # classes that request server-side `text2vec-transformers` are
-        # converted to `none` (server not running that module in dev).
-        if self.use_local_embeddings and isinstance(classes, dict):
-            for _nm, sch in classes.items():
-                try:
-                    vec = sch.get("vectorizer") if isinstance(sch, dict) else None
-                    if isinstance(vec, str) and "text2vec-transformers" in vec.lower():
-                        # mutate schema in-memory for local dev
-                        sch["vectorizer"] = "none"
-                        self.logger.log_kv("WEAVIATE_SCHEMA_ADJUSTED", class_name=_nm, from_vectorizer=vec, to_vectorizer="none")
-                except Exception:
-                    # best-effort: don't fail if schema shape unexpected
-                    continue
 
         created = []
         for name, schema in classes.items():
@@ -1041,36 +1012,13 @@ class WeaviateStore:
             found = self._find_section_by_parent_and_text(parent_sha, section_text)
             if found:
                 obj_id = found.get("id")
-                # update (compute and attach vector if local embeddings enabled)
-                if self.use_local_embeddings:
-                    try:
-                        pc = get_global_paraphrase_client(self.cfg)
-                        vec = pc.text_to_embedding(section_text)
-                        props_with_vec = dict(props)
-                        props_with_vec["_vector"] = vec
-                        self._data_object_update(props_with_vec, "CVSection", obj_id)
-                    except Exception as e:
-                        # if embeddings fail, fall back to update without vector
-                        self.logger.log_kv("PARAPHRASE_EMBED_ERROR", error=str(e), sha=parent_sha)
-                        self._data_object_update(props, "CVSection", obj_id)
-                else:
-                    self._data_object_update(props, "CVSection", obj_id)
+                # update (server-side vectorization only)
+                self._data_object_update(props, "CVSection", obj_id)
                 self.logger.log_kv("WEAVIATE_CVSECTION_UPDATED", id=obj_id, parent_sha=parent_sha)
                 return {"id": obj_id, "created": False, "weaviate_ok": True}
             else:
-                # create (compute embedding locally if enabled and pass to server)
-                if self.use_local_embeddings:
-                    try:
-                        pc = get_global_paraphrase_client(self.cfg)
-                        vec = pc.text_to_embedding(section_text)
-                        props_with_vec = dict(props)
-                        props_with_vec["_vector"] = vec
-                        new_id = self._data_object_create(props_with_vec, "CVSection")
-                    except Exception as e:
-                        self.logger.log_kv("PARAPHRASE_EMBED_ERROR", error=str(e), sha=parent_sha)
-                        new_id = self._data_object_create(props, "CVSection")
-                else:
-                    new_id = self._data_object_create(props, "CVSection")
+                # create (server-side vectorization only)
+                new_id = self._data_object_create(props, "CVSection")
                 nid = new_id.get("id") if isinstance(new_id, dict) else new_id
                 self.logger.log_kv("WEAVIATE_CVSECTION_CREATED", id=nid, parent_sha=parent_sha)
                 return {"id": nid, "created": True, "weaviate_ok": True}
@@ -1152,34 +1100,12 @@ class WeaviateStore:
             for it in items:
                 if (it.get("section_text") or "").strip() == (section_text or "").strip():
                     obj_id = it.get("_additional", {}).get("id") or it.get("id")
-                    # update with local embedding if enabled
-                    if self.use_local_embeddings:
-                        try:
-                            pc = get_global_paraphrase_client(self.cfg)
-                            vec = pc.text_to_embedding(section_text)
-                            props_with_vec = dict(props)
-                            props_with_vec["_vector"] = vec
-                            self._data_object_update(props_with_vec, "RoleSection", obj_id)
-                        except Exception as e:
-                            self.logger.log_kv("PARAPHRASE_EMBED_ERROR", error=str(e), sha=parent_sha)
-                            self._data_object_update(props, "RoleSection", obj_id)
-                    else:
-                        self._data_object_update(props, "RoleSection", obj_id)
+                    # update (server-side vectorization only)
+                    self._data_object_update(props, "RoleSection", obj_id)
                     self.logger.log_kv("WEAVIATE_ROLESECTION_UPDATED", id=obj_id, parent_sha=parent_sha)
                     return {"id": obj_id, "created": False, "weaviate_ok": True}
-            # create (compute embedding locally if enabled and pass to server)
-            if self.use_local_embeddings:
-                try:
-                    pc = get_global_paraphrase_client(self.cfg)
-                    vec = pc.text_to_embedding(section_text)
-                    props_with_vec = dict(props)
-                    props_with_vec["_vector"] = vec
-                    new_id = self._data_object_create(props_with_vec, "RoleSection")
-                except Exception as e:
-                    self.logger.log_kv("PARAPHRASE_EMBED_ERROR", error=str(e), sha=parent_sha)
-                    new_id = self._data_object_create(props, "RoleSection")
-            else:
-                new_id = self._data_object_create(props, "RoleSection")
+            # create (server-side vectorization only)
+            new_id = self._data_object_create(props, "RoleSection")
             nid = new_id.get("id") if isinstance(new_id, dict) else new_id
             self.logger.log_kv("WEAVIATE_ROLESECTION_CREATED", id=nid, parent_sha=parent_sha)
             return {"id": nid, "created": True, "weaviate_ok": True}
