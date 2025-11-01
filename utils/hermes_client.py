@@ -126,12 +126,12 @@ class HermesClient:
                 )
                 load_kwargs["quantization_config"] = bnb
                 # Let HF use fp16 where appropriate
-                load_kwargs["torch_dtype"] = torch.float16
+                load_kwargs["dtype"] = torch.float16
             except Exception as exc:
                 raise RuntimeError(f"bitsandbytes / BitsAndBytesConfig not available: {exc}")
         else:
             # prefer FP16 for CUDA models
-            load_kwargs["torch_dtype"] = torch.float16
+            load_kwargs["dtype"] = torch.float16
 
         try:
             # trust_remote_code left False for safety; change if model requires it
@@ -168,10 +168,22 @@ class HermesClient:
                 gen_opts["do_sample"] = False
 
         if generate_kwargs.get("temperature") is None:
-            gen_opts["temperature"] = self.temperature
+            # Only set temperature when sampling is enabled; some generation
+            # configurations (e.g., deterministic beams/do_sample=False) ignore it
+            if gen_opts.get("do_sample", False):
+                gen_opts["temperature"] = self.temperature
 
         # Merge user-provided kwargs (explicit wins)
         gen_opts.update(generate_kwargs)
+
+        # If sampling is disabled, remove sampling-only generation flags that
+        # HF may warn about (e.g., temperature, top_k, top_p). This avoids
+        # "generation flags are not valid and may be ignored" warnings when
+        # callers pass temperature but do_sample is False.
+        if not gen_opts.get("do_sample", False):
+            for _opt in ("temperature", "top_k", "top_p", "typical_p"):
+                if _opt in gen_opts:
+                    gen_opts.pop(_opt, None)
 
         inputs = self.tokenizer(prompt, return_tensors="pt")
         # Move input tensors to model device
@@ -250,6 +262,11 @@ class HermesClient:
                 text = _safe_format(text, prompt_vars)
             except Exception as exc:
                 raise ValueError(f"Failed to format prompt template: {exc}")
+            # If a 'hint' placeholder wasn't provided, ensure leftover '{hint}' is removed
+            if "hint" not in prompt_vars:
+                # remove any literal '{hint}' occurrences left in the template to avoid
+                # sending placeholder text to the model
+                text = text.replace("{hint}", "")
         # If caller only wants to preview the formatted prompt, return it
         if preview_only:
             return text

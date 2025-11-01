@@ -3,6 +3,8 @@ Return exactly one line containing only the value of the requested field.
 Rules:
 - Input CV text will be provided where the placeholder {cv} appears.
 - Replace {field} with the target field name (e.g., first_name, email).
+- Replace {field} with the target field name (e.g., first_name, email).
+- MODEL_HINT: {hint}
 - If the field is not present, return an empty line for text fields or 0 for numeric fields.
 - Do NOT include any labels, JSON, punctuation, commentary, or additional lines — only the raw value.
 

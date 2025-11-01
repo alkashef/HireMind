@@ -1,0 +1,7 @@
+{
+  "first_name": "Return exactly one word: the person's first name only. Strip punctuation (commas, periods).",
+  "last_name": "Return the family/last name only; no labels or punctuation.",
+  "full_name": "Return the full name as 'Given Family' with a single space separator; no trailing comma.",
+  "email": "Return a single valid email address only, all lowercased.",
+  "phone": "Return phone number using digits and optional +, - or spaces; no labels."
+}
