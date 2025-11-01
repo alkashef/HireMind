@@ -26,6 +26,7 @@ from openai import OpenAI
 
 from config.settings import AppConfig
 from utils.logger import AppLogger
+from utils.prompt_loader import get_prompt_bundle
 
 
 class OpenAIManager:
@@ -56,25 +57,14 @@ class OpenAIManager:
         self._vs_id: str | None = None  # SDK-managed vector store id (future reuse)
         self._vs_id_http: str | None = None  # HTTP fallback vector store id (future reuse)
 
-    def _load_prompt(self, name: str) -> str:
-        """Load a prompt template from the repository `prompts/` folder.
-
-        Parameters
-        - name: Filename inside `prompts/` (e.g. 'extract_from_cv_user.md')
-
-        Returns
-        - Contents of the prompt file as a stripped string.
-
-        Raises
-        - RuntimeError when the prompt file cannot be read.
-        """
-        # prompts/ is at repo root; this file is utils/openai_manager.py
-        root = Path(__file__).resolve().parent.parent
-        p = root / "prompts" / name
-        try:
-            return p.read_text(encoding="utf-8").strip()
-        except Exception as e:
-            raise RuntimeError(f"Prompt load failed: {name} -> {e}")
+    def _load_prompts(self) -> tuple[str, str]:
+        """Load system and user prompts from the unified JSON bundle."""
+        bundle = get_prompt_bundle(prompt_key="extract_cv_fields_json", cfg=self.config)
+        system_text = bundle.get("system", "")
+        user_text = bundle.get("user", "")
+        if not system_text or not user_text:
+            raise RuntimeError("Unified prompt JSON is missing system or user text")
+        return system_text, user_text
 
     def extract_full_name(self, file_path: Path) -> Tuple[Dict[str, Any] | None, str | None]:
         """Extract a structured JSON object (profile) from a file using OpenAI.
@@ -104,9 +94,8 @@ class OpenAIManager:
 
             client = OpenAI()
 
-            # Load prompts (now request a full profile JSON)
-            system_text = self._load_prompt("extract_from_cv_system.md")
-            user_text = self._load_prompt("extract_from_cv_user.md")
+            # Load prompts (system + user) from unified JSON
+            system_text, user_text = self._load_prompts()
 
             # Upload file
             up = client.files.create(file=file_path.open("rb"), purpose="assistants")

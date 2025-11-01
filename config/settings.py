@@ -144,13 +144,7 @@ class AppConfig:
     # Prompt template filenames (inside the `prompts/` folder).
     # These return the filename (string). Callers should join with the prompts
     # folder when opening the file (e.g., Path('prompts') / cfg.prompt_...).
-    @property
-    def prompt_extract_from_cv_system(self) -> str:
-        return os.getenv("PROMPT_EXTRACT_FROM_CV_SYSTEM", "extract_from_cv_system.md")
-
-    @property
-    def prompt_extract_from_cv_user(self) -> str:
-        return os.getenv("PROMPT_EXTRACT_FROM_CV_USER", "extract_from_cv_user.md")
+    # Unified prompt bundle replaces legacy system/user prompt files.
 
     @property
     def prompt_cv_full_name_system(self) -> str:
@@ -160,24 +154,12 @@ class AppConfig:
     def prompt_cv_full_name_user(self) -> str:
         return os.getenv("PROMPT_CV_FULL_NAME_USER", "cv_full_name_user.md")
 
-    @property
-    def prompt_numeric_2_plus_2(self) -> str:
-        return os.getenv("PROMPT_NUMERIC_2_PLUS_2", "prompt_numeric_2_plus_2.md")
-
-    @property
-    def prompt_summarize_short(self) -> str:
-        return os.getenv("PROMPT_SUMMARIZE_SHORT", "prompt_summarize_short.md")
-
-    @property
-    def prompt_sample_short_hello(self) -> str:
-        return os.getenv("PROMPT_SAMPLE_SHORT_HELLO", "sample_short_text_hello.md")
-
-    @property
-    def prompt_hello_world(self) -> str:
-        return os.getenv("PROMPT_HELLO_WORLD", "hello_world.txt")
-
-    @property
-    def prompt_summarize_this(self) -> str:
-        return os.getenv("PROMPT_SUMMARIZE_THIS", "summarize_this.txt")
+    # Removed obsolete prompt properties (numeric_2_plus_2, summarize_short,
+    # sample_short_hello, hello_world, summarize_this). Project no longer uses them.
 
     # Local model configuration removed: project uses OpenAI and/or server-side vectorization only.
+
+    @property
+    def prompt_extract_cv_fields_json(self) -> str:
+        """Filename of consolidated per-field extraction prompt (JSON with template + hints)."""
+        return os.getenv("PROMPT_EXTRACT_CV_FIELDS_JSON", "prompt_extract_cv_fields.json")

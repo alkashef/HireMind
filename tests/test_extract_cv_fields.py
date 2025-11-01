@@ -134,24 +134,26 @@ def is_valid_output(s: str, cv_sample: str) -> bool:
     return True
 
 
-def extract_with_retry(client, cv_text: str, field: str, hint: str = "") -> str:
+def extract_with_retry(client, cv_text: str, field: str, hint: str = "", template: Optional[str] = None) -> str:
     try:
-        out = client.generate_from_prompt_file(
-            "extract_field_user.md",
-            prompt_vars={"cv": cv_text, "field": field, "hint": hint},
-            max_new_tokens=32,
+        inline_prompt = (
+            template.format(cv=cv_text, field=field, hint=hint)
+            if template else
+            f"Return exactly one line containing only the value of the field {field} from the CV below.\n"
+            f"If missing, return an empty line.\n\nCV START\n{cv_text}\nCV END\n"
         )
+        out = client.generate(inline_prompt, max_new_tokens=32, do_sample=False, temperature=0.0)
         if isinstance(out, str) and is_valid_output(out, cv_text):
             return out.strip()
     except Exception:
         pass
 
-    inline = (
+    inline2 = (
         f"Return exactly one line containing only the value of the field {field} from the CV below.\n"
         f"If missing, return an empty line.\n\nCV START\n{cv_text}\nCV END\n"
     )
     try:
-        out2 = client.generate(inline, max_new_tokens=32, do_sample=False, temperature=0.0)
+        out2 = client.generate(inline2, max_new_tokens=32, do_sample=False, temperature=0.0)
         if isinstance(out2, str) and is_valid_output(out2, cv_text):
             return out2.strip()
     except Exception:
@@ -234,15 +236,10 @@ def build_markdown_table(rows: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _ordered_fields_from_hints(hints_path: Path) -> List[str]:
-    """Return the field names in the exact order from field_hints.json."""
-    try:
-        raw = json.loads(hints_path.read_text(encoding="utf-8"))
-        if isinstance(raw, dict):
-            # In CPython 3.7+, dict preserves insertion order; rely on file order
-            return list(raw.keys())
-    except Exception:
-        pass
+def _ordered_fields_from_hints_map(hints_map: Dict[str, Any]) -> List[str]:
+    """Return the field names in the exact order provided by the hints map (insertion order)."""
+    if isinstance(hints_map, dict):
+        return list(hints_map.keys())
     return []
 
 
@@ -327,7 +324,8 @@ def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     # Ensure .env is loaded, then resolve paths from environment (no hard-coded constants)
     from config.settings import AppConfig as _Cfg
-    _Cfg()
+    from utils.prompt_loader import get_prompt_bundle
+    cfg = _Cfg()
     env_cv_json = os.getenv("TEST_CV_REF_JSON") or os.getenv("TEST_CV_JSON_OUTPUT")
     env_cv_pdf = os.getenv("TEST_CV_PATH")
     env_results_dir = os.getenv("TEST_RESULTS")
@@ -345,7 +343,7 @@ def main() -> int:
     fixture = Path(env_cv_json)
     pdf_path = Path(env_cv_pdf)
     results_dir = Path(env_results_dir)
-    hints_path = repo_root / "prompts" / "field_hints.json"
+    # Consolidated JSON prompt (template + hints) via AppConfig / .env
 
     # Inputs
     try:
@@ -354,21 +352,24 @@ def main() -> int:
         print(f"ERROR: Failed to read fixture: {e}")
         return 2
 
+    # Load consolidated JSON prompt (template + hints) through loader
     try:
-        field_hints_map = _read_json(hints_path)
-        if not isinstance(field_hints_map, dict):
-            field_hints_map = {}
+        bundle = get_prompt_bundle(prompt_key="extract_cv_fields_json", cfg=cfg)
     except Exception:
-        field_hints_map = {}
+        bundle = {"template": "", "hints": {}, "fields": []}
+    template = bundle.get("template", "")
+    field_hints_map = bundle.get("hints", {})
+    fields_from_bundle = bundle.get("fields", [])
 
     if not isinstance(cv_text, str) or not cv_text.strip():
         print("ERROR: Empty CV text from fixture; cannot proceed")
         return 2
 
     # Determine ordered fields from hints and run OpenAI-only
-    ordered_fields = _ordered_fields_from_hints(hints_path)
+    # Prefer explicit fields order from bundle; fallback to hints order
+    ordered_fields = list(fields_from_bundle) if isinstance(fields_from_bundle, list) and fields_from_bundle else _ordered_fields_from_hints_map(field_hints_map)
     if not ordered_fields:
-        print("ERROR: Could not read ordered fields from prompts/field_hints.json")
+        print("ERROR: Could not read ordered fields from prompts/prompt_extract_cv_fields.json")
         return 2
     try:
         results, _ = _run_openai(pdf_path, expected_map, ordered_fields)

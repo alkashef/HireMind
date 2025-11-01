@@ -4,7 +4,5 @@ python-dotenv>=1.0.0
 requests>=2.31.0
 PyMuPDF>=1.22.0     # used for PDF text extraction (fitz)
 python-docx>=0.8.11 # used for DOCX text extraction
-
-pytest>=7.0.0
 weaviate-client>=3.23.0
 PyYAML>=6.0

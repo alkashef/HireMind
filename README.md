@@ -29,8 +29,8 @@ Note: the extraction pipeline is intentionally generic — it applies to both CV
 - `static/status.js` – shared in-app status and progress helpers used by the UI
  - `utils/csv_manager.py` – CSVStore and RolesStore encapsulating read/write of `data/applicants.csv` and `data/roles.csv`
 - `utils/openai_manager.py` – encapsulates OpenAI SDK + HTTP fallback (vector stores, file_search, text.format)
-- `prompts/` – prompt templates used by the OpenAI extraction flow (e.g., `extract_from_cv_system.md`, `extract_from_cv_user.md`)
-- `prompts/field_hints.json` – ordered list of fields and concise guidance; drives the field coverage and ordering in the standalone extraction report
+- `prompts/` – unified prompt bundle used by the OpenAI extraction flow (`prompt_extract_cv_fields.json`)
+- `prompts/prompt_extract_cv_fields.json` – unified prompt bundle: `system` + `user` messages for full extraction, `fields` for ordering, `hints` for per-field guidance, `instructions`, `formatting_rules`, and an optional per-field `template`.
 - `config/.env` – runtime configuration (mirrored by `config/.env-example`)
 - `config/settings.py` – central AppConfig loader for environment and paths
 - `utils/logger.py` – AppLogger writing to `LOG_FILE_PATH` with [TIMESTAMP] and kv helper
@@ -124,7 +124,7 @@ Notes:
     - `TEST_CV_REF_JSON` – absolute path to the reference JSON with expected values (preferred)
         - Fallback: `TEST_CV_JSON_OUTPUT` if `TEST_CV_REF_JSON` isn’t set
     - `TEST_RESULTS` – directory where the Markdown report is written
-- Uses `prompts/field_hints.json` for the exact field list and ordering (no extras).
+- Uses `prompts/prompt_extract_cv_fields.json` (`fields` array) for the exact field list and ordering (no extras).
 - Makes a single OpenAI Responses API call to extract all fields as a JSON object.
 - Shows total inference time (seconds) per row and writes Markdown to `%TEST_RESULTS%\extract_fields_openai.md`.
 

@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple, Any
+import json
 
 from config.settings import AppConfig
 
@@ -47,9 +48,9 @@ def load_prompt(
     """Load a prompt template by filename or by prompt key (AppConfig property).
 
     Parameters
-    - prompt_filename: direct filename inside `prompts/` (e.g. 'extract_from_cv_user.md').
-    - prompt_key: logical key to resolve via AppConfig (e.g. 'extract_from_cv_user' or
-      'prompt_extract_from_cv_user'). The function will try to read `cfg.prompt_<key>`.
+        - prompt_filename: direct filename inside `prompts/` (e.g. 'prompt_extract_cv_fields.json').
+        - prompt_key: logical key to resolve via AppConfig (e.g. 'extract_cv_fields_json' or
+            'prompt_extract_cv_fields_json'). The function will try to read `cfg.prompt_<key>`.
     - cfg: optional AppConfig instance; a new one is created when omitted.
 
     Returns the prompt text as a string. Raises FileNotFoundError or ValueError
@@ -87,6 +88,82 @@ def load_prompt(
     return text
 
 
+def load_prompt_json(
+    prompt_filename: Optional[str] = None,
+    prompt_key: Optional[str] = None,
+    cfg: Optional[AppConfig] = None,
+) -> Dict[str, Any]:
+    """Load a JSON prompt file and return its parsed object.
+
+    The JSON file is expected to contain at least a "template" string and may include
+    a "hints" object mapping field names to guidance. Additional keys are ignored here.
+
+    Returns the parsed dict. Raises on IO or JSON parse errors.
+    """
+    raw = load_prompt(prompt_filename=prompt_filename, prompt_key=prompt_key, cfg=cfg)
+    try:
+        data = json.loads(raw)
+    except Exception as ex:
+        raise ValueError("Prompt JSON parse failed") from ex
+    if not isinstance(data, dict):
+        raise ValueError("Prompt JSON must be a JSON object at top-level")
+    return data
+
+
+def get_template_and_hints(
+    prompt_filename: Optional[str] = None,
+    prompt_key: Optional[str] = None,
+    cfg: Optional[AppConfig] = None,
+) -> Tuple[str, Dict[str, str]]:
+    """Convenience helper to read a JSON prompt and extract (template, hints).
+
+    - If prompt_filename is provided it takes precedence; otherwise prompt_key is used.
+    - Returns a tuple (template, hints_map). If no hints are present, returns an empty dict.
+    """
+    data = load_prompt_json(prompt_filename=prompt_filename, prompt_key=prompt_key, cfg=cfg)
+    template = str(data.get("template", ""))
+    hints = data.get("hints")
+    if not isinstance(hints, dict):
+        hints = {}
+    # Ensure all hint values are strings
+    hints_str: Dict[str, str] = {str(k): (str(v) if v is not None else "") for k, v in hints.items()}
+    return template, hints_str
+
+
+def get_prompt_bundle(
+    prompt_filename: Optional[str] = None,
+    prompt_key: Optional[str] = None,
+    cfg: Optional[AppConfig] = None,
+) -> Dict[str, Any]:
+    """Return the full prompt bundle from a JSON prompt file.
+
+    Bundle keys:
+    - system: str
+    - user: str
+    - template: str  (per-field extraction; optional)
+    - fields: List[str]
+    - hints: Dict[str, str]
+    - instructions: List[str]
+    - formatting_rules: List[str]
+    """
+    data = load_prompt_json(prompt_filename=prompt_filename, prompt_key=prompt_key, cfg=cfg)
+    bundle: Dict[str, Any] = {
+        "system": str(data.get("system", "")),
+        "user": str(data.get("user", "")),
+        "template": str(data.get("template", "")),
+        "fields": list(data.get("fields") or []),
+        "hints": data.get("hints") or {},
+        "instructions": list(data.get("instructions") or []),
+        "formatting_rules": list(data.get("formatting_rules") or []),
+    }
+    # Normalize hints values to strings
+    if isinstance(bundle["hints"], dict):
+        bundle["hints"] = {str(k): (str(v) if v is not None else "") for k, v in bundle["hints"].items()}
+    else:
+        bundle["hints"] = {}
+    return bundle
+
+
 def generate_from_prompt(
     prompt_key: Optional[str] = None,
     prompt_filename: Optional[str] = None,
@@ -111,4 +188,10 @@ def generate_from_prompt(
         raise ValueError(f"Missing prompt variable: {missing}") from ex
 
 
-__all__ = ["load_prompt", "generate_from_prompt"]
+__all__ = [
+    "load_prompt",
+    "generate_from_prompt",
+    "load_prompt_json",
+    "get_template_and_hints",
+    "get_prompt_bundle",
+]
