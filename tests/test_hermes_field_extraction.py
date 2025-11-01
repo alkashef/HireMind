@@ -35,9 +35,14 @@ def load_cv_text_from_openai_fixture(path: Path) -> str:
 def test_hermes_extract_basic_fields():
     """Call Hermes per-field prompt and compare to small expected map.
 
-    This is intentionally strict: the returned string must exactly match the
-    expected reference values. The test will skip if Hermes or HF deps are
-    missing in the environment.
+    Behavior:
+    - Extract each field once using the per-field prompt (with hints).
+    - Validate type/format and compare against expected for known fields.
+    - Accumulate results across all fields (no early aborts).
+    - At the end, print a compact table: field | test output | expected | pass/fail.
+    - If any field fails, the test fails after printing the table.
+
+    The test will skip if Hermes or HF deps are missing in the environment.
     """
     # Resolve fixture path
     fixture = Path(__file__).resolve().parents[0] / "data" / "Ahmad Alkashef - Resume - OpenAI.json"
@@ -251,6 +256,7 @@ def test_hermes_extract_basic_fields():
     # Use the external hints mapping when producing failure messages
     field_hints = field_hints_map
 
+    results: list[dict] = []
     for field in all_fields:
         want = expected.get(field, None)
         got = extract_with_retry(field)
@@ -261,58 +267,92 @@ def test_hermes_extract_basic_fields():
         norm_got = _normalize_for_assert(field, got or "")
         norm_want = _normalize_for_assert(field, want or "") if want is not None else None
 
+        passed = True
+        reason = ""
+
         if field in expected:
-            # For numeric fields compare numerically with small tolerance; otherwise exact (after normalization)
             if field in numeric_fields:
                 want_val = expected.get(field, None)
                 got_num = _to_float_or_none(norm_got)
                 if want_val is None:
                     want_num = None
                 else:
-                    # want is likely a number in JSON (int/float)
                     try:
                         want_num = float(want_val)
                     except Exception:
                         want_num = None
-                ok = False
                 if want_num is None:
-                    ok = (got_num is None) or (norm_got == "")
+                    passed = (got_num is None) or (norm_got == "")
                 else:
-                    ok = got_num is not None and abs(got_num - want_num) <= 1e-2
-                if not ok:
-                    hint = field_hints.get(field, "Return a single numeric value only.")
-                    pytest.fail(
-                        f"Field '{field}' numeric mismatch:\n"
-                        f"  expected: {want_val}\n"
-                        f"  got (raw, truncated): '{got_display}'\n"
-                        f"  parsed got: {got_num}\n"
-                        f"  hint: {hint}"
-                    )
+                    passed = got_num is not None and abs(got_num - want_num) <= 1e-2
+                if not passed:
+                    reason = f"numeric mismatch (got={got_num}, want={want_val})"
             else:
-                if norm_got != norm_want:
-                    hint = field_hints.get(field, "Return the requested information exactly as a single short line.")
-                    pytest.fail(
-                        f"Field '{field}' mismatch:\n"
-                        f"  expected: '{expected.get(field, '')}'\n"
-                        f"  got (raw, truncated): '{got_display}'\n"
-                        f"  suggested normalized got: '{norm_got}'\n"
-                        f"  hint: {hint}\n"
-                        f"  Note: test avoids printing CV/prompt contents for privacy/verbosity."
-                    )
+                passed = (norm_got == norm_want)
+                if not passed:
+                    reason = f"mismatch"
         elif field in numeric_fields:
-            if not _is_numeric_like(norm_got):
-                hint = field_hints.get(field, "Return a single numeric value or empty if missing.")
-                pytest.fail(
-                    f"Field '{field}' should be numeric-like or empty:\n"
-                    f"  got (raw, truncated): '{got_display}'\n"
-                    f"  hint: {hint}"
-                )
+            passed = _is_numeric_like(norm_got)
+            if not passed:
+                reason = "not numeric-like"
         else:
-            # General string fields: must be single-line, not too long, not JSON-like (is_valid_output covers it)
-            if not is_valid_output(norm_got, cv_text):
-                hint = field_hints.get(field, "Return the requested information exactly as a single short line.")
-                pytest.fail(
-                    f"Field '{field}' invalid format/content:\n"
-                    f"  got (raw, truncated): '{got_display}'\n"
-                    f"  hint: {hint}"
-                )
+            passed = is_valid_output(norm_got, cv_text)
+            if not passed:
+                reason = "invalid format/content"
+
+        results.append({
+            "field": field,
+            "got": got_display,
+            "want": str(expected.get(field, "")),
+            "passed": passed,
+            "reason": reason,
+        })
+
+    # Print a compact result table
+    def _print_table(rows: list[dict]):
+        col1, col2, col3, col4 = "Field", "Test Output", "Expected", "Result"
+        # Limit output columns to keep table readable in CI
+        def _lim(s: str, n: int = 60) -> str:
+            return s if len(s) <= n else s[: n - 3] + "..."
+
+        header = [col1, col2, col3, col4]
+        data = []
+        for r in rows:
+            res = "PASS" if r["passed"] else "FAIL"
+            if not r["passed"] and r["reason"]:
+                res += f" ({r['reason']})"
+            data.append([r["field"], _lim(r["got"]), _lim(r["want"]), res])
+
+        # Compute widths
+        widths = [
+            max(len(header[0]), *(len(d[0]) for d in data)) if data else len(header[0]),
+            max(len(header[1]), *(len(d[1]) for d in data)) if data else len(header[1]),
+            max(len(header[2]), *(len(d[2]) for d in data)) if data else len(header[2]),
+            max(len(header[3]), *(len(d[3]) for d in data)) if data else len(header[3]),
+        ]
+
+        def _fmt_row(cols: list[str]) -> str:
+            return (
+                f"{cols[0]:<{widths[0]}} | "
+                f"{cols[1]:<{widths[1]}} | "
+                f"{cols[2]:<{widths[2]}} | "
+                f"{cols[3]:<{widths[3]}}"
+            )
+
+        sep = "-" * (sum(widths) + 3 * 3)  # 3 separators of ' | '
+        print("\nHermes extraction results (all fields):")
+        print(_fmt_row(header))
+        print(sep)
+        for d in data:
+            print(_fmt_row(d))
+        print("\n")
+
+    _print_table(results)
+
+    # Final assertion: fail if any field failed
+    failed_fields = [r["field"] for r in results if not r["passed"]]
+    if failed_fields:
+        pytest.fail(
+            "Some fields did not match expected values. See the printed table above for details.\n"
+            f"Failed fields: {', '.join(failed_fields)}"
+        )

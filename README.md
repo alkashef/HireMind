@@ -169,6 +169,7 @@ python tests/test_hermes_local.py
 Notes:
 - If your GPU has limited VRAM (e.g., ~8GB), the 4-bit (BitsAndBytes) load may be skipped by the test — FP16 is still validated. The test contains a fallback that attempts CPU offload for 4-bit quantization and will `skip` if the local hardware cannot place parameters on CUDA.
 - If you need reliable 4-bit testing, run on a machine with more GPU RAM or use a cloud VM with a larger GPU.
+ - If the Hermes per-field test is being skipped on Windows/CPU-only, disable 4-bit quantization by setting `HERMES_QUANTIZE_4BIT=false` in `config/.env` (or `.env-example` then copy to `.env`). On CPU, the Hermes client loads with FP32 by default.
 
 #### Data and CSV
 
@@ -192,6 +193,30 @@ python -m pytest tests/test_gpu.py -q          # GPU probe and torch checks
 python -m pytest tests/test_weaviate_local.py -q  # Weaviate probe (if running locally)
 python -m pytest tests/test_extractors_local.py -q
 python -m pytest tests/test_hermes_field_extraction.py -q  # Per-field Hermes extraction using prompts/field_hints.json
+
+Hermes per-field extraction report (no pytest)
+----------------------------------------------
+
+If you prefer a plain Python script that prints a clean table (no pytest output), run:
+
+```cmd
+python scripts\hermes_field_extraction_report.py
+```
+
+Notes:
+- Suppresses warnings and prints a compact table (Field | Test Output | Expected | Result).
+- Reads CV text and expected values from `tests/data/Ahmad Alkashef - Resume - OpenAI.json`.
+- Uses `prompts/extract_field_user.md` and `prompts/field_hints.json`.
+- On Windows/CPU-only, set `HERMES_QUANTIZE_4BIT=false` in `config/.env`.
+
+Troubleshooting Hermes test skips
+---------------------------------
+
+If you see the Hermes per-field test reported as `skipped`:
+
+- Ensure dependencies are installed: `transformers`, `torch` (CPU or CUDA), and optionally `bitsandbytes` if you want 4-bit quantization.
+- On Windows or CPU-only setups, set `HERMES_QUANTIZE_4BIT=false` in `config/.env` to avoid requiring `bitsandbytes`.
+- Re-run with reasons shown: `python -m pytest -rs tests/test_hermes_field_extraction.py`.
 ```
 
 Notes:

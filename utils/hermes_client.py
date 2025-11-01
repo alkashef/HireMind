@@ -130,8 +130,15 @@ class HermesClient:
             except Exception as exc:
                 raise RuntimeError(f"bitsandbytes / BitsAndBytesConfig not available: {exc}")
         else:
-            # prefer FP16 for CUDA models
-            load_kwargs["dtype"] = torch.float16
+            # Prefer FP16 for CUDA models; on CPU use FP32 for broad op support
+            try:
+                if torch.cuda.is_available():
+                    load_kwargs["dtype"] = torch.float16
+                else:
+                    load_kwargs["dtype"] = torch.float32
+            except Exception:
+                # Conservative default if device check fails
+                load_kwargs["dtype"] = torch.float32
 
         try:
             # trust_remote_code left False for safety; change if model requires it
