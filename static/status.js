@@ -27,10 +27,20 @@
   }
 
   function setUIBusy(busy) {
-    ['browseBtn','refreshBtn','selectAllBtn','extractBtn'].forEach(id => {
+    const ids = [
+      // Applicants
+      'browseBtn','refreshBtn','selectAllBtn','extractBtn','matchBtn',
+      // Roles
+      'roleBrowseBtn','roleRefreshBtn','roleSelectAllBtn','roleExtractBtn','roleMatchBtn',
+      // Tabs
+      'tabApplicants','tabRoles'
+    ];
+    ids.forEach(id => {
       const el = document.getElementById(id);
       if (el) el.disabled = !!busy;
     });
+    // Also toggle all buttons as a safety net (in case new buttons are added without IDs)
+    document.querySelectorAll('button').forEach(btn => { btn.disabled = !!busy; });
   }
 
   // Expose to global scope so inline code can call them

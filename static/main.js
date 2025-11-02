@@ -330,7 +330,8 @@
     const browse = document.getElementById('browseBtn');
     const refresh = document.getElementById('refreshBtn');
     const selectAll = document.getElementById('selectAllBtn');
-    const extractBtn = document.getElementById('extractBtn');
+  const extractBtn = document.getElementById('extractBtn');
+  const matchBtn = document.getElementById('matchBtn');
 
     if (browse) browse.addEventListener('click', async () => {
       try {
@@ -367,7 +368,7 @@
       }
       try {
         if (window.setUIBusy) window.setUIBusy(true);
-        if (picked.length === 1) {
+  if (picked.length === 1) {
           // Run the 7-step pipeline for a single selected CV and update UI with step progress
           const steps = ['1/6: Extracting text', '2/6: OpenAI fields', '3/6: Slicing sections', '4/6: OpenAI embeddings', '5/6: Writing to Weaviate', '6/6: Reading back'];
           let currentStep = 0;
@@ -390,7 +391,11 @@
           window.lastExtractFieldsPath = picked[0];
           window.lastExtractFieldsRow = fieldsToRow(j.fields || {});
           renderApplicantDetailsForPath(picked[0]);
-          setStatus('Pipeline completed. Displaying extracted fields and Weaviate readback.');
+          // Refresh the list/markers after single-file extraction
+          if (typeof refreshApplicantsExtracted === 'function') {
+            await refreshApplicantsExtracted();
+          }
+          setStatus('Pipeline completed. Displaying extracted fields.');
         } else {
           // Batch pipeline for multiple files
           await startApplicantsExtractPolling();
@@ -410,6 +415,25 @@
         setStatus(`Error: ${e.message || e}`);
       } finally {
         if (applicantsExtractPollTimer) { clearInterval(applicantsExtractPollTimer); applicantsExtractPollTimer = null; }
+        if (window.setUIBusy) window.setUIBusy(false);
+      }
+    });
+
+    if (matchBtn) matchBtn.addEventListener('click', async () => {
+      try {
+        if (window.setUIBusy) window.setUIBusy(true);
+        setStatus('Matching applicants to roles (placeholder)...');
+        // After matching completes, refresh lists if needed
+        if (typeof refreshApplicantsExtracted === 'function') {
+          await refreshApplicantsExtracted();
+        }
+        if (typeof refreshRolesExtracted === 'function') {
+          await refreshRolesExtracted();
+        }
+        setStatus('Matching complete.');
+      } catch (e) {
+        setStatus(`Match error: ${e.message || e}`);
+      } finally {
         if (window.setUIBusy) window.setUIBusy(false);
       }
     });
@@ -459,7 +483,7 @@
     });
     if (roleRefresh) roleRefresh.addEventListener('click', loadRolesList);
 
-    // Initial load for applicants so extracted markers appear on first view
-    loadApplicantsList();
+    // Initial load for roles so extracted markers appear on first view
+    loadRolesList();
   });
 })();

@@ -7,39 +7,13 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
   </head>
   <body>
+    <div class="app-banner">HireMind</div>
     <div class="tabs" role="tablist" aria-label="Sections">
-      <button id="tabApplicants" class="tab-btn active" role="tab" aria-selected="true" aria-controls="paneApplicants">Applicants</button>
-      <button id="tabRoles" class="tab-btn" role="tab" aria-selected="false" aria-controls="paneRoles">Roles</button>
+      <button id="tabRoles" class="tab-btn active" role="tab" aria-selected="true" aria-controls="paneRoles">Roles</button>
+      <button id="tabApplicants" class="tab-btn" role="tab" aria-selected="false" aria-controls="paneApplicants">Applicants</button>
     </div>
-
-    <div id="paneApplicants" class="tab-pane active" role="tabpanel" aria-labelledby="tabApplicants">
-      <div class="content-row">
-        <div class="left-controls">
-          <label class="folder-label" for="folderPath">CVs Repository:</label>
-          <div class="row">
-            <div class="path-box">
-              <input id="folderPath" type="text" readonly placeholder="No folder selected" />
-            </div>
-            <button id="browseBtn">Browse…</button>
-            <button id="refreshBtn" title="Refresh list">Refresh</button>
-          </div>
-        </div>
-        <div class="left-content">
-          <div id="list" class="list"></div>
-          <div class="list-footer">
-            <span id="fileCount" class="file-count"></span>
-            <div class="actions">
-              <button id="selectAllBtn" title="Select all files">Select All</button>
-              <button id="extractBtn">Extract</button>
-            </div>
-          </div>
-        </div>
-        <div id="detailCol1" class="detail-pane" aria-label="Details column 1"><div class="tables-container" id="tablesCol1"></div></div>
-        <div id="detailCol2" class="detail-pane" aria-label="Details column 2"><div class="tables-container" id="tablesCol2"></div></div>
-      </div>
-    </div>
-
-    <div id="paneRoles" class="tab-pane" role="tabpanel" aria-labelledby="tabRoles">
+    
+    <div id="paneRoles" class="tab-pane active" role="tabpanel" aria-labelledby="tabRoles">
       <div class="content-row">
         <div class="left-controls">
           <label class="folder-label" for="roleFolderPath">Roles Repository:</label>
@@ -58,10 +32,40 @@
             <div class="actions">
               <button id="roleSelectAllBtn" title="Select all files">Select All</button>
               <button id="roleExtractBtn">Extract</button>
+              <button id="roleMatchBtn" title="Match roles to applicants (coming soon)">Match</button>
             </div>
           </div>
         </div>
-  <div id="roleDetailCol1" class="detail-pane" aria-label="Roles details column 1"><div class="tables-container" id="roleTablesCol1"></div></div>
+        <div id="roleDetailCol1" class="detail-pane" aria-label="Roles details column 1"><div class="tables-container" id="roleTablesCol1"></div></div>
+        <div id="roleDetailCol2" class="detail-pane" aria-label="Roles details column 2"><div class="tables-container" id="roleTablesCol2"></div></div>
+      </div>
+    </div>
+    
+    <div id="paneApplicants" class="tab-pane" role="tabpanel" aria-labelledby="tabApplicants">
+      <div class="content-row">
+        <div class="left-controls">
+          <label class="folder-label" for="folderPath">CVs Repository:</label>
+          <div class="row">
+            <div class="path-box">
+              <input id="folderPath" type="text" readonly placeholder="No folder selected" />
+            </div>
+            <button id="browseBtn">Browse…</button>
+            <button id="refreshBtn" title="Refresh list">Refresh</button>
+          </div>
+        </div>
+        <div class="left-content">
+          <div id="list" class="list"></div>
+          <div class="list-footer">
+            <span id="fileCount" class="file-count"></span>
+            <div class="actions">
+              <button id="selectAllBtn" title="Select all files">Select All</button>
+              <button id="extractBtn">Extract</button>
+              <button id="matchBtn" title="Match applicants to roles (coming soon)">Match</button>
+            </div>
+          </div>
+        </div>
+        <div id="detailCol1" class="detail-pane" aria-label="Details column 1"><div class="tables-container" id="tablesCol1"></div></div>
+        <div id="detailCol2" class="detail-pane" aria-label="Details column 2"><div class="tables-container" id="tablesCol2"></div></div>
       </div>
     </div>
 

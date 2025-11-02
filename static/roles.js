@@ -12,45 +12,21 @@ function updateRolesFooter(total) {
   const selNum = rolesSelected.size || 0;
   const extractedNum = document.querySelectorAll('#roleList .item.extracted').length || 0;
   const dupText = rolesDuplicateCount > 0 ? ` | ${rolesDuplicateCount} duplicates found` : '';
-  countEl.textContent = `${totalNum} file${totalNum === 1 ? '' : 's'} | ${selNum} selected | ${extractedNum} extracted${dupText}`;
+  if (countEl) countEl.textContent = `${totalNum} file${totalNum === 1 ? '' : 's'} | ${selNum} selected | ${extractedNum} extracted${dupText}`;
 }
 
 function markExtractedInRolesList() {
   try {
-    // Use only 'filename' key from get_public_rows, compare case-insensitively
     const extractedSet = new Set((rolesTableRows || []).map(r => (r.filename || '').toString().toLowerCase()));
     document.querySelectorAll('#roleList .item').forEach(el => {
       const p = decodeURIComponent(el.getAttribute('data-path') || '');
       const name = p.split(/[\\/]/).pop().toLowerCase();
-      // Roles tab logic for UI parity with applicants
-      // Handles UI for roles: selection, extraction, table rendering
+      el.classList.toggle('extracted', extractedSet.has(name));
+    });
+  } catch (_) {}
+}
 
-      const rolesSelected = new Set();
-      let roleLastSelectedIndex = null;
-      let rolesDuplicateCount = 0;
-      let rolesTableRows = [];
-
-      function updateRolesFooter(total) {
-        const countEl = document.getElementById('roleFileCount');
-        const totalNum = Number(total) || 0;
-        const selNum = rolesSelected.size || 0;
-        const extractedNum = document.querySelectorAll('#roleList .item.extracted').length || 0;
-        const dupText = rolesDuplicateCount > 0 ? ` | ${rolesDuplicateCount} duplicates found` : '';
-        countEl.textContent = `${totalNum} file${totalNum === 1 ? '' : 's'} | ${selNum} selected | ${extractedNum} extracted${dupText}`;
-      }
-
-      function markExtractedInRolesList() {
-        try {
-          const extractedSet = new Set((rolesTableRows || []).map(r => (r.filename || '').toString().toLowerCase()));
-          document.querySelectorAll('#roleList .item').forEach(el => {
-            const p = decodeURIComponent(el.getAttribute('data-path') || '');
-            const name = p.split(/[\\/]/).pop().toLowerCase();
-            el.classList.toggle('extracted', extractedSet.has(name));
-          });
-        } catch (_) {}
-      }
-
-      async function highlightRolesDuplicates(files) {
+async function highlightRolesDuplicates(files) {
         try {
           const r = await fetch('/api/hashes', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files }),
@@ -72,7 +48,7 @@ function markExtractedInRolesList() {
         }
       }
 
-      document.getElementById('roleExtractBtn').addEventListener('click', async () => {
+  document.getElementById('roleExtractBtn').addEventListener('click', async () => {
         const picked = Array.from(rolesSelected);
         if (picked.length === 0) {
           setStatus('Select one or more role files to extract.');
@@ -118,6 +94,26 @@ function markExtractedInRolesList() {
           setStatus(`Error: ${e.message || e}`);
         } finally {
           setUIBusy(false);
+        }
+      });
+
+      // Placeholder match button: refresh lists when matching completes
+      const roleMatchBtn = document.getElementById('roleMatchBtn');
+      if (roleMatchBtn) roleMatchBtn.addEventListener('click', async () => {
+        try {
+          if (window.setUIBusy) window.setUIBusy(true);
+          setStatus('Matching roles to applicants (placeholder)...');
+          if (typeof refreshRolesExtracted === 'function') {
+            await refreshRolesExtracted();
+          }
+          if (typeof refreshApplicantsExtracted === 'function') {
+            await refreshApplicantsExtracted();
+          }
+          setStatus('Matching complete.');
+        } catch (e) {
+          setStatus(`Match error: ${e.message || e}`);
+        } finally {
+          if (window.setUIBusy) window.setUIBusy(false);
         }
       });
 
@@ -171,8 +167,10 @@ function markExtractedInRolesList() {
 
       async function renderRoleDetailsForPath(path) {
         const col1 = document.getElementById('roleTablesCol1');
+        const col2 = document.getElementById('roleTablesCol2');
         if (!col1) return;
         col1.innerHTML = '';
+        if (col2) col2.innerHTML = '';
         if (!path) return;
         const basename = (path || '').toString().split(/[\\/]/).pop();
 
@@ -253,7 +251,14 @@ function markExtractedInRolesList() {
           ['Timestamp', n.timestamp],
         ];
 
-        col1.innerHTML = mkTable('Role', core) + mkTable('Skills', skills) + mkTable('Qualifications', qual) + mkTable('Metadata', meta);
+        const leftHtml = mkTable('Role', core) + mkTable('Skills', skills);
+        const rightHtml = mkTable('Qualifications', qual) + mkTable('Metadata', meta);
+        if (col2) {
+          col1.innerHTML = leftHtml;
+          col2.innerHTML = rightHtml;
+        } else {
+          col1.innerHTML = leftHtml + rightHtml;
+        }
       }
 
       function fieldsToRoleRow(fields) {

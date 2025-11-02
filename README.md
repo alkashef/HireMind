@@ -7,10 +7,14 @@ HireMind orchestrates a CV extraction workflow that feeds candidate documents th
 - Batch CV ingestion with Weaviate storage (CVDocument + CVSection classes)
 - Rich server-side logging for key events (listing, picks, hashing, extraction, OpenAI calls; folder events use APPLICANTS_FOLDER and ROLES_FOLDER)
 - Flask single-page UI for browsing folders, selecting CVs, triggering extraction, and viewing results
+- Top banner: "HireMind" displayed in blue on a light grey background, full-width and flush with the very top (no margins/borders)
 - UI uses a 4-column layout: left-most column for CV file list (with Select All and Extract), and three detail columns displaying Personal/Professionalism/Flags, Experience/Stability/Socioeconomic, and Weaviate readback data
-- Roles tab mirrors the Applicants left-side layout: Roles Repository picker (path text box + Browse + Refresh) and a list of .pdf/.docx role files
-  - Lists now show a small ✓ icon next to already extracted items for quick scanning
-  - On Roles load, the details pane shows the first file automatically (parity with Applicants)
+-  Roles tab mirrors the Applicants layout: file list on the left and two details columns on the right
+  - Lists show a small database icon next to already extracted items (applies to both Applicants and Roles); matched items show a puzzle icon
+  - Both file lists use a white background; extracted items are icon-marked only (no green row highlight)
+  - Static assets: image icons are served from `/img` (e.g., `/img/database.png`)
+  - On Roles load, the details panes show the first file automatically (parity with Applicants)
+  - Both tabs include a placeholder "Match" button next to Extract (no functionality yet)
 - The folder path + Browse/Refresh control sits in the left column and matches the file list width; selected files are visually highlighted with a left accent line
   
 **Note:** The extraction pipeline is intentionally generic — it applies to both CVs (applicants) and role/job-description files. The same file-reading, OpenAI extraction, sectioning, embedding and upsert pipeline will be reused for both file types. The only differences are the downstream attributes and the Weaviate class properties which are mapped per-type (applicants vs roles).

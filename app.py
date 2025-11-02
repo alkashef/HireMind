@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List
 import json
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_from_directory
 
 from config.settings import AppConfig
 from utils.logger import AppLogger
@@ -170,6 +170,17 @@ def get_openai_model() -> str:
 def index():
     log("INDEX_VIEW")
     return render_template("index.html")
+
+
+# Serve images from the repo-level 'img' folder under the URL path /img
+@app.route("/img/<path:filename>")
+def serve_img(filename: str):
+    try:
+        img_dir = os.path.join(app.root_path, "img")
+        return send_from_directory(img_dir, filename)
+    except Exception as e:
+        log_kv("IMG_SERVE_ERROR", file=filename, error=str(e))
+        return jsonify({"error": "image not found"}), 404
 
 
 @app.route("/api/default-folder")
