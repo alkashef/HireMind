@@ -77,6 +77,14 @@ def _load_weaviate_env_from_file() -> None:
 # Load WEAVIATE_* variables from config/.env (if present) before running probes
 _load_weaviate_env_from_file()
 
+# Ensure repository root is on sys.path so imports like `utils.weaviate_store` work
+try:
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+except Exception:
+    pass
+
 
 def get_target_url() -> str | None:
     url = os.environ.get("WEAVIATE_URL", "").strip()
@@ -114,16 +122,10 @@ def probe_http(base_url: str) -> bool:
 
 
 def try_ensure_schema(base_url: str) -> None:
-    try:
-        # The import may fail if `weaviate-client` isn't installed; that's OK.
-        from utils.weaviate_store import WeaviateStore
-
-        print("weaviate-client available: attempting ensure_schema() via WeaviateStore")
-        ws = WeaviateStore(url=base_url, api_key=os.environ.get("WEAVIATE_API_KEY"), batch_size=int(os.environ.get("WEAVIATE_BATCH_SIZE", "64")))
-        ok = ws.ensure_schema()
-        print("ensure_schema() returned:", ok)
-    except Exception as e:
-        print("Skipping ensure_schema() (client missing or error):", repr(e))
+    # Intentionally do not validate server-side vectorizer modules.
+    # This project performs embeddings via OpenAI; schema checks are skipped.
+    print("Skipping schema checks: using OpenAI embeddings (no server vectorizer validation).")
+    return
 
 
 def main() -> int:

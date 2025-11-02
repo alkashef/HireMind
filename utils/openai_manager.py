@@ -18,8 +18,9 @@ decide whether to proceed.
 """
 
 import json
+import os
 from pathlib import Path
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, List, Optional
 
 import openai as openai_pkg
 from openai import OpenAI
@@ -235,5 +236,49 @@ class OpenAIManager:
                     pass
 
                 return data or {}, None
+        except Exception as e:
+            return None, str(e)
+
+    # ---------------------------------------------------------------------
+    # Embeddings
+    def embed_texts(self, texts: List[str], model: Optional[str] = None) -> Tuple[List[List[float]] | None, str | None]:
+        """Compute OpenAI embeddings for a list of texts.
+
+        Parameters
+        - texts: list of input strings (non-empty list)
+        - model: optional embedding model name; when omitted, reads
+          OPENAI_EMBEDDING_MODEL from AppConfig/env or defaults to
+          'text-embedding-3-small'.
+
+        Returns
+        - (embeddings, None) on success where embeddings is a list of vectors
+          (list[float]) in the same order as input texts.
+        - (None, error_message) on failure.
+        """
+        try:
+            if not texts:
+                return [], None
+
+            m = model or os.getenv("OPENAI_EMBEDDING_MODEL") or "text-embedding-3-small"
+
+            # Use official SDK path
+            client = OpenAI()
+            resp = client.embeddings.create(model=m, input=texts)
+            # SDK returns .data list with .embedding vectors
+            vectors: List[List[float]] = []
+            for item in getattr(resp, "data", []) or []:
+                vec = getattr(item, "embedding", None)
+                if isinstance(vec, list):
+                    vectors.append([float(x) for x in vec])
+                else:
+                    # preserve order; append empty vector if missing
+                    vectors.append([])
+
+            if len(vectors) != len(texts):
+                return None, "embeddings count mismatch"
+
+            # small trace in logs (avoid dumping vectors)
+            self.logger.log_kv("OPENAI_EMBEDDINGS_OK", count=len(vectors), model=m)
+            return vectors, None
         except Exception as e:
             return None, str(e)

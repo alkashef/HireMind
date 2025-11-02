@@ -496,6 +496,49 @@ class WeaviateStore:
         except Exception as e:
             attempts.append(f"data.update(...): {e}")
 
+        # Final fallback: HTTP REST API to update the object
+        try:
+            if self.url:
+                obj_url = self.url.rstrip("/") + f"/v1/objects/{uuid}"
+                payload_json = {"class": class_name, "properties": props}
+                if vector is not None:
+                    payload_json["vector"] = vector
+                try:
+                    import requests
+
+                    # Prefer PATCH for partial update; some servers accept PUT as well
+                    resp = requests.patch(obj_url, json=payload_json, timeout=10)
+                    if resp.status_code in (200, 201, 204):
+                        return None
+                    # Try PUT if PATCH not supported
+                    resp2 = requests.put(obj_url, json=payload_json, timeout=10)
+                    if resp2.status_code in (200, 201, 204):
+                        return None
+                    attempts.append(f"http objects PATCH/PUT status {resp.status_code}/{resp2.status_code}")
+                except Exception as e:
+                    # urllib fallback
+                    try:
+                        from urllib.request import Request, urlopen
+                        import json as _json
+
+                        data = _json.dumps(payload_json).encode("utf-8")
+                        # Try PATCH first
+                        req = Request(obj_url, data=data, headers={"Content-Type": "application/json"}, method="PATCH")
+                        try:
+                            with urlopen(req, timeout=10) as fh:
+                                _ = fh.read()
+                                return None
+                        except Exception:
+                            # Fallback to PUT
+                            req2 = Request(obj_url, data=data, headers={"Content-Type": "application/json"}, method="PUT")
+                            with urlopen(req2, timeout=10) as fh:
+                                _ = fh.read()
+                                return None
+                    except Exception as e2:
+                        attempts.append(f"http objects urllib error: {e2}")
+        except Exception as e:
+            attempts.append(f"http objects update attempt: {e}")
+
         raise RuntimeError(f"Unable to update data object. Attempts: {attempts}")
 
     def _query_do(self, class_name: str, props: List[str], where: Optional[dict] = None, additional: Optional[List[str]] = None) -> dict:
@@ -507,8 +550,10 @@ class WeaviateStore:
                 q = self.client.query.get(class_name, props)
                 if where is not None and hasattr(q, "with_where"):
                     q = q.with_where(where)
-                if additional is not None and hasattr(q, "with_additional"):
-                    q = q.with_additional(additional)
+                # Always request some _additional fields; default to ['id']
+                addl = additional if additional is not None else ["id"]
+                if hasattr(q, "with_additional"):
+                    q = q.with_additional(addl)
                 if hasattr(q, "do"):
                     return q.do()
         except Exception as e:
@@ -521,10 +566,12 @@ class WeaviateStore:
                 if where:
                     # best-effort conversion; leave to server if not supported
                     where_clause = ""
-                # Ensure we request _additional.id so callers can locate object ids
+                # Include requested _additional fields (default to id)
                 fields = "\n".join(props)
+                addl = additional if additional is not None else ["id"]
+                addl_block = f"\n_additional {{ {' '.join(addl)} }}"
                 if "_additional" not in fields:
-                    fields = fields + "\n_additional { id }"
+                    fields = fields + addl_block
                 gql = f"{{Get{{{class_name}{{{fields}}}}}}}"
                 return self.client.graphql(gql)
         except Exception as e:
@@ -558,6 +605,11 @@ class WeaviateStore:
                     except Exception as e:
                         attempts.append(f"where-build-error: {e}")
 
+                # Add requested _additional (default to id)
+                addl = additional if additional is not None else ["id"]
+                addl_block = f"\n_additional {{ {' '.join(addl)} }}"
+                if "_additional" not in fields:
+                    fields = fields + addl_block
                 gql = f"{{Get{{{class_name}{where_str}{{{fields}}}}}}}"
                 try:
                     import requests
@@ -806,7 +858,8 @@ class WeaviateStore:
                 "full_text",
             ]
 
-            res = self._query_do("CVDocument", props, where)
+            # request id and vector in _additional so callers can access embeddings
+            res = self._query_do("CVDocument", props, where, additional=["id", "vector"])
             objs = res.get("data", {}).get("Get", {}).get("CVDocument", [])
             if objs:
                 first = objs[0]
@@ -935,6 +988,8 @@ class WeaviateStore:
             "filename": props.get("filename"),
             "attributes": attributes,
             "full_text": props.get("full_text"),
+            # include vector if available on the document
+            "vector": (props.get("_additional") or {}).get("vector"),
         }
         return result
 
@@ -999,7 +1054,7 @@ class WeaviateStore:
             self.logger.log_kv("WEAVIATE_SECTION_QUERY_ERROR", error=str(e))
             return None
 
-    def upsert_cv_section(self, parent_sha: str, section_type: str, section_text: str) -> Dict[str, object]:
+    def upsert_cv_section(self, parent_sha: str, section_type: str, section_text: str, vector: Optional[list] = None) -> Dict[str, object]:
         """Create or update a CVSection. Uses (parent_sha, section_text) to dedupe.
 
         Returns dict: {id, created(bool), weaviate_ok(bool)}.
@@ -1008,6 +1063,9 @@ class WeaviateStore:
             return {"id": None, "created": False, "weaviate_ok": False}
 
         props = {"parent_sha": parent_sha, "section_type": section_type, "section_text": section_text}
+        # If vectorizer is 'none' in schema, allow callers to attach a vector
+        if vector is not None:
+            props["_vector"] = vector
         try:
             found = self._find_section_by_parent_and_text(parent_sha, section_text)
             if found:
@@ -1189,5 +1247,37 @@ class WeaviateStore:
             self.logger.log_kv("PROCESS_FILE_ERROR", error=str(e), file=str(p))
             result["errors"].append(str(e))
             return result
+
+    # ------------------------- read helpers for tests ---------------------
+    def read_cv_sections(self, parent_sha: str) -> List[Dict[str, object]]:
+        """Return all CVSection rows for a given parent_sha.
+
+        Shape: [{id, parent_sha, section_type, section_text}]
+        """
+        if not self.client:
+            raise RuntimeError("Weaviate client not initialized")
+        try:
+            where = {"path": ["parent_sha"], "operator": "Equal", "valueString": parent_sha}
+            res = self._query_do(
+                "CVSection",
+                ["parent_sha", "section_type", "section_text"],
+                where,
+                additional=["id", "vector"],
+            )
+            items = res.get("data", {}).get("Get", {}).get("CVSection", [])
+            out: List[Dict[str, object]] = []
+            for it in items:
+                out.append({
+                    "id": (it.get("_additional") or {}).get("id") or it.get("id"),
+                    "parent_sha": it.get("parent_sha"),
+                    "section_type": it.get("section_type"),
+                    "section_text": it.get("section_text"),
+                    # include the embedding vector if present on the object
+                    "vector": (it.get("_additional") or {}).get("vector"),
+                })
+            return out
+        except Exception as e:
+            self.logger.log_kv("WEAVIATE_READ_SECTIONS_ERROR", error=str(e), parent_sha=parent_sha)
+            return []
  
 

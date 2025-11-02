@@ -134,6 +134,45 @@ Notes:
 - The project is OpenAI-only and does not require local model packages.
 - Prefer running tests in the project's virtual environment (`conda activate hiremind`).
 
+End-to-end pipeline (PDF ➜ text ➜ fields ➜ sections ➜ embeddings ➜ Weaviate ➜ readback)
+-----------------------------------------------------------------------------
+
+Run the non-interactive E2E script that performs the full 6-step pipeline and writes JSON artifacts:
+
+```cmd
+python tests\test_e2e_extract_pdf.py
+```
+
+What it does:
+- Step 1: Extracts text from `TEST_CV_PATH` (PDF) and writes JSON.
+- Step 2: Calls OpenAI once to extract all fields and writes JSON.
+- Step 3: Slices text into titled sections using `utils.slice.slice_sections` and writes JSON.
+- Step 4: Computes OpenAI embeddings for each section and writes JSON.
+- Step 5: Ensures Weaviate schema, writes the CV document and upserts sections (server-side vectors).
+- Step 6: Reads back the CV and sections from Weaviate and writes a verification JSON (includes embeddings when available).
+
+Output artifact (override in `config/.env`):
+- `TEST_E2E_JSON` — consolidated JSON file (default `tests/e2e.json`) containing keys: `text`, `fields`, `sections`, `embeddings`, and `weaviate`.
+
+Readback verification
+- After writing to Weaviate, the script also reads and verifies the saved document and sections:
+
+```cmd
+python tests\test_e2e_extract_pdf.py
+```
+
+- The script will also write a separate readback report to:
+    - `TEST_E2E_JSON_READ` (default `tests/e2e_read.json`) with fields: `sha`, `document`, `sections`, and `checks` (doc_ok, sections_count_ok, counts). The `document` and each item in `sections` include `_additional.vector` as `vector` when available, so you can inspect embeddings.
+
+Required environment:
+- `TEST_CV_PATH` — absolute path to the input PDF
+- `OPENAI_API_KEY` — for steps 2 and 4
+- `WEAVIATE_URL` (or `WEAVIATE_USE_LOCAL=true`) and `WEAVIATE_SCHEMA_PATH` — for step 5
+- Optional: `OPENAI_EMBEDDING_MODEL` (default `text-embedding-3-small`)
+
+Optional CSV dump:
+- If `TEST_CV_CSV_OUTPUT` is set, step 5 also writes a compact CSV summary of the Weaviate readback.
+
 Environment sourcing for tests
 ------------------------------
 

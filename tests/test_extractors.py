@@ -73,6 +73,17 @@ def main() -> int:
     print(f"[OK] PDF extracted in {t1 - t0:.2f}s; length={len(pdf_text)} chars")
     print("[PDF SAMPLE]\n" + _truncate(pdf_text, 600))
 
+    # Dump extracted PDF text to tests/data/extracted_text.txt for inspection
+    try:
+        out_dir = PROJECT_ROOT / "tests" / "data"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / "extracted_text.txt"
+        with out_path.open("w", encoding="utf-8") as fh:
+            fh.write(pdf_text)
+        print(f"[OK] Extracted PDF text written to: {out_path}")
+    except Exception as exc:
+        print(f"[WARN] Could not write extracted text to file: {exc}")
+
     # Step 2: DOCX extraction
     print("\n[STEP 2/2] Extracting DOCX text...")
     t2 = time.perf_counter()
