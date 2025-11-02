@@ -105,7 +105,7 @@ python -m pytest -q
 
 ```cmd
 python -m pytest tests/test_weaviate_local.py -q  # Weaviate probe (if running locally)
-python -m pytest tests/test_extractors_local.py -q
+python tests\test_extractors_local.py             # local extractors (script mode, high verbosity)
 ```
 
 OpenAI extraction report (standalone; env-driven)

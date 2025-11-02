@@ -71,6 +71,7 @@ def main() -> int:
         return 4
     t1 = time.perf_counter()
     print(f"[OK] PDF extracted in {t1 - t0:.2f}s; length={len(pdf_text)} chars")
+    print("[PDF SAMPLE]\n" + _truncate(pdf_text, 600))
 
     # Step 2: DOCX extraction
     print("\n[STEP 2/2] Extracting DOCX text...")
@@ -88,6 +89,7 @@ def main() -> int:
         return 4
     t3 = time.perf_counter()
     print(f"[OK] DOCX extracted in {t3 - t2:.2f}s; length={len(docx_text)} chars")
+    print("[DOCX SAMPLE]\n" + _truncate(docx_text, 600))
 
     # Final summary (clear test results)
     print("\n===== Test Results =====")
