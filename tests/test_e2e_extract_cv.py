@@ -194,20 +194,28 @@ def step3_slice_sections(logger: AppLogger, e2e_json: Path) -> Path:
 
 def step4_embed_sections(logger: AppLogger, e2e_json: Path) -> Path:
     logger.log_kv("STEP_START", step="embed_sections", src=str(e2e_json))
-    print("[4/6] Computing OpenAI embeddings for each section...")
+    print("[4/6] Computing OpenAI embeddings (doc + sections)...")
     cfg = AppConfig()
     mgr = OpenAIManager(cfg, logger)
     payload = _read_payload(e2e_json)
+    text_full: str = payload.get("text", "")
     sec_map: Dict[str, str] = payload.get("sections", {}) or {}
     titles: List[str] = list(sec_map.keys())
     texts: List[str] = [sec_map[t] for t in titles]
+    # document embedding
+    doc_vecs, err0 = mgr.embed_texts([text_full])
+    if err0:
+        logger.log_kv("ERROR", step="embed_doc", error=err0)
+        raise RuntimeError(f"Embeddings failed (doc): {err0}")
+    doc_vector = doc_vecs[0] if doc_vecs else []
+    # section embeddings
     vectors, err = mgr.embed_texts(texts)
     if err:
         logger.log_kv("ERROR", step="embed_sections", error=err)
-        raise RuntimeError(f"Embeddings failed: {err}")
+        raise RuntimeError(f"Embeddings failed (sections): {err}")
     model = os.getenv("OPENAI_EMBEDDING_MODEL") or "text-embedding-3-small"
     emb_map = {title: (vectors[i] if i < len(vectors) else []) for i, title in enumerate(titles)}
-    payload["embeddings"] = {"model": model, "embeddings": emb_map}
+    payload["embeddings"] = {"model": model, "doc_vector": doc_vector, "embeddings": emb_map}
     _write_payload(e2e_json, payload)
     logger.log_kv("STEP_COMPLETE", step="embed_sections", out=str(e2e_json), count=len(emb_map))
     print(f"UPDATED: {e2e_json} (embeddings)")
@@ -379,6 +387,13 @@ def step5_write_to_weaviate(logger: AppLogger, pdf: Path, e2e_json: Path) -> Pat
     filename = doc_props.pop("filename", pdf.name)
     # Attributes contains all scalar properties except sha/filename/full_text
     attrs = {k: v for k, v in doc_props.items() if k not in ("sha",)}
+    # Attach document-level vector when present
+    try:
+        doc_vector = (raw.get("embeddings", {}) or {}).get("doc_vector")
+        if doc_vector:
+            attrs["_vector"] = doc_vector
+    except Exception:
+        pass
     ws.write_cv_to_db(sha=sha, filename=filename, full_text=full_text, attributes=attrs)
 
     # Upsert sections (server-side vectorization)

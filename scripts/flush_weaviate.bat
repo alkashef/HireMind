@@ -53,26 +53,6 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM Recreate the empty folder
-mkdir "%FULL_PATH%" 2>nul
-
-echo SUCCESS: Weaviate data folder flushed.
-echo.
-
-REM Clear CSV files
-set "APPLICANTS_CSV=%REPO_ROOT%\data\applicants.csv"
-set "ROLES_CSV=%REPO_ROOT%\data\roles.csv"
-
-echo Clearing CSV files...
-if exist "%APPLICANTS_CSV%" (
-    type nul > "%APPLICANTS_CSV%"
-    echo - applicants.csv cleared
-)
-if exist "%ROLES_CSV%" (
-    type nul > "%ROLES_CSV%"
-    echo - roles.csv cleared
-)
-
 echo.
 echo All data flushed successfully.
 pause

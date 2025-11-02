@@ -8,13 +8,16 @@ HireMind orchestrates a CV extraction workflow that feeds candidate documents th
 - Rich server-side logging for key events (listing, picks, hashing, extraction, OpenAI calls; folder events use APPLICANTS_FOLDER and ROLES_FOLDER)
 - Flask single-page UI for browsing folders, selecting CVs, triggering extraction, and viewing results
 - Top banner: "HireMind" displayed in blue on a light grey background, full-width and flush with the very top (no margins/borders)
+ - Top banner: "HireMind" displayed in blue on a darker light-grey background, full-width and flush with the very top (no margins/borders)
 - UI uses a 4-column layout: left-most column for CV file list (with Select All and Extract), and three detail columns displaying Personal/Professionalism/Flags, Experience/Stability/Socioeconomic, and Weaviate readback data
 -  Roles tab mirrors the Applicants layout: file list on the left and two details columns on the right
   - Lists show a small database icon next to already extracted items (applies to both Applicants and Roles); matched items show a puzzle icon
   - Both file lists use a white background; extracted items are icon-marked only (no green row highlight)
   - Static assets: image icons are served from `/img` (e.g., `/img/database.png`)
   - On Roles load, the details panes show the first file automatically (parity with Applicants)
+  - When a role is selected, attributes are shown even if the source file was moved; the UI falls back to Weaviate lookup by SHA
   - Both tabs include a placeholder "Match" button next to Extract (no functionality yet)
+  - Consistent spacing: tab content has margins aligned with the tab bar; table category headings have tighter spacing above their tables
 - The folder path + Browse/Refresh control sits in the left column and matches the file list width; selected files are visually highlighted with a left accent line
   
 **Note:** The extraction pipeline is intentionally generic — it applies to both CVs (applicants) and role/job-description files. The same file-reading, OpenAI extraction, sectioning, embedding and upsert pipeline will be reused for both file types. The only differences are the downstream attributes and the Weaviate class properties which are mapped per-type (applicants vs roles).
@@ -29,10 +32,10 @@ HireMind orchestrates a CV extraction workflow that feeds candidate documents th
 ## Architecture
 
 - **Data storage:** Weaviate vector database (local Docker instance or cloud)
-- **Extraction pipeline:** PDF → text → OpenAI fields → slice sections → OpenAI embeddings → Weaviate
+- **Extraction pipeline:** PDF → text → OpenAI fields → slice sections → OpenAI embeddings (doc + sections) → Weaviate
 - **UI data flow:** File list from `/api/applicants` (queries Weaviate CVDocument), details from Weaviate readback
 - **CSV files:** Deprecated; `scripts/flush_weaviate.bat` clears both Weaviate data folder and CSV files
-- **Manual vector provision:** OpenAI embeddings attached to CVSection/RoleSection objects; Weaviate vectorizer bypassed via `SKIP_WEAVIATE_VECTORIZER_CHECK=1`
+- **Manual vector provision:** OpenAI embeddings attached to top-level documents (CVDocument/RoleDocument) and to sections; Weaviate vectorizer bypassed via `SKIP_WEAVIATE_VECTORIZER_CHECK=1`
 
 ## Technology Stack
 
@@ -167,7 +170,7 @@ Notes:
 - The project is OpenAI-only and does not require local model packages.
 - Prefer running tests in the project's virtual environment (`conda activate hiremind`).
 
-End-to-end pipeline (PDF/DOCX ➜ text ➜ fields ➜ sections ➜ embeddings ➜ Weaviate ➜ readback)
+End-to-end pipeline (PDF/DOCX ➜ text ➜ fields ➜ sections ➜ embeddings (doc + sections) ➜ Weaviate ➜ readback)
 -----------------------------------------------------------------------------
 
 Run the non-interactive E2E script that performs the full 6-step pipeline and writes JSON artifacts:
@@ -180,7 +183,7 @@ What it does:
 - Step 1: Extracts text from `TEST_CV_PATH` (PDF) or `TEST_CV_DOCX_PATH` (DOCX) and writes JSON.
 - Step 2: Calls OpenAI once to extract all fields and writes JSON.
 - Step 3: Slices text into titled sections using `utils.slice.slice_sections` and writes JSON.
-- Step 4: Computes OpenAI embeddings for each section and writes JSON.
+- Step 4: Computes OpenAI embeddings for the whole document and each section, and writes JSON.
 - Step 5: Ensures Weaviate schema, writes the CV document and upserts sections (server-side vectors).
 - Step 6: Reads back the CV and sections from Weaviate and writes a verification JSON (includes embeddings when available).
 
@@ -235,6 +238,7 @@ Environment:
 Notes:
 - The script accepts PDF/DOCX, extracts text locally, and sends text-only to OpenAI with `text.format: json_object`.
 - It computes embeddings for the full role document and each sliced section, and writes both document and sections to Weaviate. If both role paths are set, it processes both.
+ - Readback JSON now includes all persisted role attributes (job title, employer, location, skills, requirements, etc.) for parity with the extracted fields payload.
 
 Environment sourcing for tests
 ------------------------------

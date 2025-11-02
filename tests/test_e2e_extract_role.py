@@ -210,10 +210,30 @@ def step5_write_weaviate(logger: AppLogger, role_path: Path, e2e_json: Path) -> 
     fields: Dict[str, Any] = payload.get("fields", {}) or {}
     doc_vector: List[float] = (payload.get("embeddings", {}) or {}).get("doc_vector", []) or []
 
+    # Persist all known role attributes to Weaviate so readback mirrors role_e2e.json
     attrs = {
         "timestamp": os.getenv("ROLE_TIMESTAMP") or "",
+        # Prefer extracted job_title as the role title; fallback to filename stem
         "role_title": fields.get("job_title") or Path(filename).stem,
         "_vector": doc_vector if doc_vector else None,
+        # Extended attributes (pass-through; utils.weaviate_store.write_role_to_db normalizes types)
+        "job_title": fields.get("job_title"),
+        "employer": fields.get("employer"),
+        "job_location": fields.get("job_location"),
+        "language_requirement": fields.get("language_requirement"),
+        "onsite_requirement_percentage": fields.get("onsite_requirement_percentage"),
+        "onsite_requirement_mandatory": fields.get("onsite_requirement_mandatory"),
+        "serves_government": fields.get("serves_government"),
+        "serves_financial_institution": fields.get("serves_financial_institution"),
+        "min_years_experience": fields.get("min_years_experience"),
+        "must_have_skills": fields.get("must_have_skills"),
+        "should_have_skills": fields.get("should_have_skills"),
+        "nice_to_have_skills": fields.get("nice_to_have_skills"),
+        "min_must_have_degree": fields.get("min_must_have_degree"),
+        "preferred_universities": fields.get("preferred_universities"),
+        "responsibilities": fields.get("responsibilities"),
+        "technical_qualifications": fields.get("technical_qualifications"),
+        "non_technical_qualifications": fields.get("non_technical_qualifications"),
     }
     doc_res = ws.write_role_to_db(sha, filename, text, attrs)
 

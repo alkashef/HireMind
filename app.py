@@ -870,13 +870,19 @@ def api_applicants_pipeline():
     from utils.slice import slice_sections
     sections_map = slice_sections(text)
 
-    # Step 4: embeddings for sections
+    # Step 4: embeddings for doc + sections
     log_kv("PIPELINE_STEP", step="4/6", action="openai_embeddings")
     titles = list(sections_map.keys())
     texts = [sections_map[t] for t in titles]
+    # document embedding
+    doc_vecs, err0 = openai_mgr.embed_texts([text])
+    if err0:
+        return jsonify({"error": f"embeddings failed (doc): {err0}"}), 500
+    doc_vector = doc_vecs[0] if doc_vecs else []
+    # section embeddings
     vectors, err2 = openai_mgr.embed_texts(texts)
     if err2:
-        return jsonify({"error": f"embeddings failed: {err2}"}), 500
+        return jsonify({"error": f"embeddings failed (sections): {err2}"}), 500
     emb_model = os.getenv("OPENAI_EMBEDDING_MODEL") or "text-embedding-3-small"
 
     # Step 5 & 6: write to Weaviate using vectors and then read back
@@ -895,6 +901,7 @@ def api_applicants_pipeline():
     attrs = {
         "timestamp": datetime.now().isoformat(),
         "cv": p.name,
+        "_vector": doc_vector if doc_vector else None,
         "personal_first_name": fget("first_name"),
         "personal_last_name": fget("last_name"),
         "personal_full_name": fget("full_name"),
@@ -1009,9 +1016,16 @@ def api_applicants_pipeline_batch():
             sections_map = slice_sections(text)
             titles = list(sections_map.keys())
             texts = [sections_map[t] for t in titles]
+            # document embedding
+            doc_vecs, err0 = openai_mgr.embed_texts([text])
+            if err0:
+                errors.append(f"{p.name} embeddings(doc): {err0}")
+                continue
+            doc_vector = doc_vecs[0] if doc_vecs else []
+            # section embeddings
             vectors, err2 = openai_mgr.embed_texts(texts)
             if err2:
-                errors.append(f"{p.name} embeddings: {err2}")
+                errors.append(f"{p.name} embeddings(sections): {err2}")
                 continue
 
             def fget(k: str) -> str:
@@ -1023,6 +1037,7 @@ def api_applicants_pipeline_batch():
             attrs = {
                 "timestamp": datetime.now().isoformat(),
                 "cv": p.name,
+                "_vector": doc_vector if doc_vector else None,
                 "personal_first_name": fget("first_name"),
                 "personal_last_name": fget("last_name"),
                 "personal_full_name": fget("full_name"),

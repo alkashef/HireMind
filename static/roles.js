@@ -143,7 +143,7 @@ async function highlightRolesDuplicates(files) {
         updateRolesFooter(0);
         if (!folder) { box.innerHTML = '<div class="muted">No folder selected.</div>'; updateRolesFooter(0); return; }
         if (!files || files.length === 0) { box.innerHTML = `<div class="muted">No .pdf or .docx files in: ${folder}</div>`; updateRolesFooter(0); return; }
-        box.innerHTML = files.map((f, i) => { const name = (f || '').toString().split(/[\\/]/).pop(); return `<div class="item" data-index="${i}" data-path="${encodeURIComponent(f)}">${name}</div>`; }).join('');
+  box.innerHTML = files.map((f, i) => { const name = (f || '').toString().split(/[\\/]/).pop(); return `<div class="item" data-index="${i}" data-path="${encodeURIComponent(f)}">${name}</div>`; }).join('');
         updateRolesFooter(files.length);
         markExtractedInRolesList();
         highlightRolesDuplicates(files);
@@ -163,6 +163,16 @@ async function highlightRolesDuplicates(files) {
             if (rolesSelected.size === 1) renderRoleDetailsForPath(Array.from(rolesSelected)[0]); else renderRoleDetailsForPath(null);
           });
         });
+        // Auto-select the first item on initial render for immediate details
+        if (items.length > 0 && rolesSelected.size === 0) {
+          const first = items[0];
+          const p0 = decodeURIComponent(first.getAttribute('data-path'));
+          first.classList.add('selected');
+          rolesSelected.add(p0);
+          roleLastSelectedIndex = 0;
+          updateRolesFooter(files.length);
+          renderRoleDetailsForPath(p0);
+        }
       }
 
       async function renderRoleDetailsForPath(path) {
@@ -182,14 +192,36 @@ async function highlightRolesDuplicates(files) {
         if (window.lastRoleExtractFieldsPath === path && window.lastRoleExtractFieldsRow) {
           row = { ...row, ...window.lastRoleExtractFieldsRow };
         } else {
+          // Prefer resolving by file path; if that fails (e.g., file moved), fall back to DB by sha from list
+          let resolved = false;
           try {
             const r = await fetch(`/api/weaviate/role_by_path?path=${encodeURIComponent(path)}`);
             const j = await r.json();
-            if (r.ok) {
+            if (r.ok && j && j.document) {
               const attrs = ((j.document || {}).attributes) || {};
               row = { ...row, ...attrs, id: (j.document || {}).id, sha: (j.document || {}).sha, filename: basename };
+              resolved = true;
             }
-          } catch (_) {}
+          } catch (_) { /* ignore */ }
+
+          if (!resolved) {
+            // Fallback: find sha for this filename from rolesTableRows and query by sha
+            const rec = (rolesTableRows || []).find(r => {
+              const fn = (r.filename || '').toString();
+              return fn === basename || fn.endsWith(basename);
+            });
+            const sha = rec && rec.sha;
+            if (sha) {
+              try {
+                const r2 = await fetch(`/api/weaviate/role_all/${encodeURIComponent(sha)}`);
+                const j2 = await r2.json();
+                if (r2.ok && j2 && j2.document) {
+                  const attrs2 = ((j2.document || {}).attributes) || {};
+                  row = { ...row, ...attrs2, id: (j2.document || {}).id, sha: (j2.document || {}).sha, filename: basename };
+                }
+              } catch (_) { /* ignore */ }
+            }
+          }
         }
 
         function mkTable(title, pairs) {

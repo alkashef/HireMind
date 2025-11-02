@@ -371,6 +371,43 @@ class WeaviateStore:
 
         raise RuntimeError(f"Unable to create Weaviate class. Attempts: {attempts}")
 
+    def _schema_add_property(self, class_name: str, prop_schema: Dict[str, Any]) -> None:
+        """Adapter to add a missing property to an existing class.
+
+        Tries client.schema.property.create, then alternative methods, and finally
+        falls back to the HTTP endpoint POST /v1/schema/{class}/properties.
+        """
+        assert self.client is not None, "Weaviate client not initialized"
+        attempts: List[str] = []
+        try:
+            # v3 style
+            if hasattr(self.client, "schema") and hasattr(self.client.schema, "property") and hasattr(self.client.schema.property, "create"):
+                try:
+                    return self.client.schema.property.create(prop_schema, class_name)  # type: ignore[arg-type]
+                except TypeError:
+                    return self.client.schema.property.create({"class": class_name, **prop_schema})
+        except Exception as e:
+            attempts.append(f"schema.property.create: {e}")
+        try:
+            # alternative name
+            if hasattr(self.client, "schema") and hasattr(self.client.schema, "add_property"):
+                return self.client.schema.add_property(class_name, prop_schema)  # type: ignore[attr-defined]
+        except Exception as e:
+            attempts.append(f"schema.add_property: {e}")
+        # HTTP fallback
+        try:
+            if self.url:
+                import requests
+                url = self.url.rstrip("/") + f"/v1/schema/{class_name}/properties"
+                resp = requests.post(url, json=prop_schema, timeout=10)
+                if resp.status_code in (200, 201):
+                    self.logger.log_kv("WEAVIATE_PROPERTY_HTTP_ADDED", class_name=class_name, prop=prop_schema.get("name"))
+                    return None
+                attempts.append(f"http add_property status {resp.status_code}: {resp.text[:200]}")
+        except Exception as e:
+            attempts.append(f"http add_property: {e}")
+        raise RuntimeError(f"Unable to add property to class {class_name}. Attempts: {attempts}")
+
     def _data_object_create(self, props: Dict[str, Any], class_name: str):
         """Adapter for creating a data object. Returns created id or raw result."""
         assert self.client is not None, "Weaviate client not initialized"
@@ -795,16 +832,37 @@ class WeaviateStore:
         else:
             raise RuntimeError(f"Invalid weaviate schema format in {schema_path}")
 
-        # Create missing classes only
+        # Create missing classes, then ensure missing properties on existing ones
 
         created = []
+        server_schema = self._schema_get()
+        server_classes = {c.get("class"): c for c in (server_schema.get("classes") or [])} if isinstance(server_schema, dict) else {}
         for name, schema in classes.items():
             if not self._class_exists(name):
                 self.logger.log_kv("WEAVIATE_CREATE_CLASS", class_name=name)
                 self._schema_create_class(schema)
                 created.append(name)
+                # refresh server class snapshot
+                server_schema = self._schema_get()
+                server_classes = {c.get("class"): c for c in (server_schema.get("classes") or [])}
             else:
                 self.logger.log_kv("WEAVIATE_CLASS_EXISTS", class_name=name)
+            # Ensure properties exist
+            try:
+                desired_props = {p.get("name"): p for p in (schema.get("properties") or [])}
+                have_props = set()
+                server_cls = server_classes.get(name) or {}
+                for p in (server_cls.get("properties") or []):
+                    n = p.get("name")
+                    if n:
+                        have_props.add(n)
+                for pname, pschema in desired_props.items():
+                    if pname not in have_props:
+                        self.logger.log_kv("WEAVIATE_ADD_MISSING_PROPERTY", class_name=name, prop=pname)
+                        self._schema_add_property(name, pschema)
+            except Exception as e:
+                # Log but do not fail schema ensure entirely
+                self.logger.log_kv("WEAVIATE_PROPERTY_ENSURE_FAILED", class_name=name, error=str(e))
 
         self.logger.log_kv("WEAVIATE_SCHEMA_ENSURED", created=",".join(created) if created else "none")
         return True
@@ -1263,7 +1321,7 @@ class WeaviateStore:
                     "responsibilities", "technical_qualifications", "non_technical_qualifications",
                 ],
                 where,
-                additional=["id"]
+                additional=["id", "vector"]
             )
             items = res.get("data", {}).get("Get", {}).get("RoleDocument", [])
             if not items:
@@ -1294,6 +1352,7 @@ class WeaviateStore:
                     "non_technical_qualifications": first.get("non_technical_qualifications"),
                 },
                 "full_text": first.get("full_text"),
+                "vector": (first.get("_additional") or {}).get("vector"),
             }
         except Exception as e:
             self.logger.log_kv("WEAVIATE_ROLE_READ_ERROR", error=str(e), sha=sha)
