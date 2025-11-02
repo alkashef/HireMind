@@ -26,7 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from utils.logger import AppLogger
-from utils.extractors import pdf_to_text, compute_sha256_bytes
+from utils.extractors import pdf_to_text, docx_to_text, compute_sha256_bytes
 from utils.slice import slice_sections
 from utils.openai_manager import OpenAIManager
 from config.settings import AppConfig
@@ -83,24 +83,47 @@ def load_dotenv(dotenv_path: Optional[Path] = None) -> dict:
     return loaded
 
 
-def resolve_cv_path(arg_path: Optional[str] = None) -> Optional[Path]:
+def resolve_cv_paths(arg_path: Optional[str] = None) -> list[Path]:
+    """Return a list of CV paths to process in order: [PDF?, DOCX?].
+
+    Priority:
+    - If arg_path provided and exists, use only that
+    - Else include TEST_CV_PATH if it exists
+    - Also include TEST_CV_DOCX_PATH if it exists
+    - Else fallback to default sample PDF under tests/data
+    """
+    found: list[Path] = []
+    def _norm(p: Path) -> Path:
+        return (Path.cwd() / p).resolve() if not p.is_absolute() else p
+
     if arg_path:
-        p = Path(arg_path)
-        if not p.is_absolute():
-            p = (Path.cwd() / p).resolve()
+        p = _norm(Path(arg_path))
         if p.exists():
-            return p
-    env_path = os.environ.get("TEST_CV_PATH")
-    if env_path:
-        p = Path(env_path)
-        if not p.is_absolute():
-            p = (Path.cwd() / p).resolve()
+            return [p]
+
+    for key in ("TEST_CV_PATH", "TEST_CV_DOCX_PATH"):
+        env_path = os.environ.get(key)
+        if not env_path:
+            continue
+        p = _norm(Path(env_path))
         if p.exists():
-            return p
+            found.append(p)
+
+    if found:
+        # de-duplicate while preserving order
+        uniq: list[Path] = []
+        seen: set[str] = set()
+        for p in found:
+            s = str(p)
+            if s not in seen:
+                seen.add(s)
+                uniq.append(p)
+        return uniq
+
     sample_pdf = PROJECT_ROOT / "tests" / "data" / DEFAULT_CV_NAME
     if sample_pdf.exists():
-        return sample_pdf
-    return None
+        return [sample_pdf]
+    return []
 
 
 def init_logger() -> AppLogger:
@@ -109,9 +132,19 @@ def init_logger() -> AppLogger:
 
 
 def step1_extract_pdf_to_json(logger: AppLogger, pdf_path: Path) -> Path:
-    logger.log_kv("STEP_START", step="extract_text", pdf=str(pdf_path))
-    print("[1/6] Extracting PDF to text...")
-    text = pdf_to_text(pdf_path)
+    """Extract text from PDF or DOCX and write to E2E JSON.
+
+    Note: Function name kept for compatibility with previous references.
+    """
+    logger.log_kv("STEP_START", step="extract_text", file=str(pdf_path))
+    print("[1/6] Extracting document to text...")
+    ext = pdf_path.suffix.lower()
+    if ext == ".pdf":
+        text = pdf_to_text(pdf_path)
+    elif ext == ".docx":
+        text = docx_to_text(pdf_path)
+    else:
+        raise RuntimeError(f"Unsupported file extension for extraction: {ext}")
     out_path = _e2e_json_path()
     payload = _read_payload(out_path)
     # Record identifiers early for downstream steps
@@ -129,7 +162,7 @@ def step1_extract_pdf_to_json(logger: AppLogger, pdf_path: Path) -> Path:
 
 
 def step2_openai_extract_fields(logger: AppLogger, pdf_path: Path) -> Path:
-    logger.log_kv("STEP_START", step="openai_extract_fields", pdf=str(pdf_path))
+    logger.log_kv("STEP_START", step="openai_extract_fields", file=str(pdf_path))
     print("[2/6] OpenAI: extracting fields (single call)...")
     cfg = AppConfig()
     mgr = OpenAIManager(cfg, logger)
@@ -474,26 +507,32 @@ def main(argv: list[str]) -> int:
     logger.log_kv("ENV_LOADED", count=len(loaded))
 
     arg = argv[1] if len(argv) > 1 else None
-    pdf = resolve_cv_path(arg)
-    if pdf is None:
+    cv_list = resolve_cv_paths(arg)
+    if not cv_list:
         msg = f"No CV found. Provide a path as an argument or place '{DEFAULT_CV_NAME}' under tests/data/"
         logger.log_kv("ERROR", reason="no_cv", message=msg)
         print(msg)
         return 2
 
-    try:
-        e2e_json = step1_extract_pdf_to_json(logger, pdf)
-        e2e_json = step2_openai_extract_fields(logger, pdf)
-        e2e_json = step3_slice_sections(logger, e2e_json)
-        e2e_json = step4_embed_sections(logger, e2e_json)
-        _ = step5_write_to_weaviate(logger, pdf, e2e_json)
-        _ = step6_read_from_weaviate(logger, e2e_json)
-    except Exception as exc:
-        logger.log_kv("ERROR", step="e2e_pipeline", exc=str(exc))
-        print(f"E2E failed: {exc}")
+    overall_ok = True
+    for idx, cv in enumerate(cv_list, start=1):
+        try:
+            print(f"\n=== Running E2E pipeline for file {idx}/{len(cv_list)}: {cv.name} ===")
+            e2e_json = step1_extract_pdf_to_json(logger, cv)
+            e2e_json = step2_openai_extract_fields(logger, cv)
+            e2e_json = step3_slice_sections(logger, e2e_json)
+            e2e_json = step4_embed_sections(logger, e2e_json)
+            _ = step5_write_to_weaviate(logger, cv, e2e_json)
+            _ = step6_read_from_weaviate(logger, e2e_json)
+        except Exception as exc:
+            overall_ok = False
+            logger.log_kv("ERROR", step="e2e_pipeline", file=str(cv), exc=str(exc))
+            print(f"E2E failed for {cv.name}: {exc}")
+
+    if not overall_ok:
         return 5
 
-    print("E2E pipeline completed successfully.")
+    print("E2E pipeline completed successfully for all inputs.")
     return 0
 
 

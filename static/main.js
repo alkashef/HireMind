@@ -30,6 +30,11 @@
       if (typeof refreshRolesExtracted === 'function') {
         await refreshRolesExtracted();
       }
+      // Show details for the first file on load (parity with Applicants)
+      const firstRoleItem = document.querySelector('#roleList .item');
+      if (firstRoleItem && typeof renderRoleDetailsForPath === 'function') {
+        renderRoleDetailsForPath(decodeURIComponent(firstRoleItem.getAttribute('data-path')));
+      }
       if (window.setStatus) window.setStatus('Ready');
     } catch (e) {
       console.error(e);
@@ -68,14 +73,12 @@
   function renderApplicantDetailsForPath(path) {
     const col1 = document.getElementById('tablesCol1');
     const col2 = document.getElementById('tablesCol2');
-    const col3 = document.getElementById('weaviateCol');
-    if (!col1 || !col2 || !col3) return;
+    if (!col1 || !col2) return;
     // Clear first
     col1.innerHTML = '';
     col2.innerHTML = '';
-    col3.innerHTML = '';
     if (!path) return;
-    const basename = (path || '').toString().split(/[\\/]/).pop();
+  const basename = (path || '').toString().split(/[\\\/]/).pop().toLowerCase();
 
     function mkTable(title, pairs) {
       const th = `<div class="table-title">${title}</div>`;
@@ -89,52 +92,84 @@
     if (useOverride) {
       row = window.lastExtractFieldsRow;
     } else {
-      // Find matching row by cv (filename) or id
+      // Try all possible filename keys for robust matching
       row = (applicantsTableRows || []).find(r => {
-        const cv = (r.cv || '').toString();
-        return cv === basename || cv.endsWith(basename);
+        const keys = ['cv', 'Filename', 'PersonalInformation_FullName', 'PersonalInformation_Filename', 'full_name', 'filename'];
+        return keys.some(k => {
+          const val = (r[k] || '').toString().toLowerCase();
+          return val === basename || val.endsWith(basename);
+        });
       });
     }
+
+    const toNorm = (r) => ({
+      full_name: r.full_name || r.PersonalInformation_FullName || r.PersonalInformation_Fullname || '',
+      first_name: r.first_name || r.PersonalInformation_FirstName || '',
+      last_name: r.last_name || r.PersonalInformation_LastName || '',
+      email: r.email || r.PersonalInformation_Email || '',
+      phone: r.phone || r.PersonalInformation_Phone || '',
+      misspelling_count: r.misspelling_count || r.Professionalism_MisspellingCount || '',
+      misspelled_words: r.misspelled_words || r.Professionalism_MisspelledWords || '',
+      visual_cleanliness: r.visual_cleanliness || r.Professionalism_VisualCleanliness || '',
+      professional_look: r.professional_look || r.Professionalism_ProfessionalLook || '',
+      formatting_consistency: r.formatting_consistency || r.Professionalism_FormattingConsistency || '',
+      years_since_graduation: r.years_since_graduation || r.Experience_YearsSinceGraduation || '',
+      total_years_experience: r.total_years_experience || r.Experience_TotalYearsExperience || '',
+      employer_names: r.employer_names || r.Experience_EmployerNames || '',
+      employers_count: r.employers_count || r.Stability_EmployersCount || '',
+      avg_years_per_employer: r.avg_years_per_employer || r.Stability_AvgYearsPerEmployer || '',
+      years_at_current_employer: r.years_at_current_employer || r.Stability_YearsAtCurrentEmployer || '',
+      address: r.address || r.SocioeconomicStandard_Address || '',
+      alma_mater: r.alma_mater || r.SocioeconomicStandard_AlmaMater || '',
+      high_school: r.high_school || r.SocioeconomicStandard_HighSchool || '',
+      education_system: r.education_system || r.SocioeconomicStandard_EducationSystem || '',
+      second_foreign_language: r.second_foreign_language || r.SocioeconomicStandard_SecondForeignLanguage || '',
+      flag_stem_degree: r.flag_stem_degree || r.Flags_FlagSTEMDegree || '',
+      military_service_status: r.military_service_status || r.Flags_MilitaryServiceStatus || '',
+      worked_at_financial_institution: r.worked_at_financial_institution || r.Flags_WorkedAtFinancialInstitution || '',
+      worked_for_egyptian_government: r.worked_for_egyptian_government || r.Flags_WorkedForEgyptianGovernment || '',
+    });
 
     if (!row) {
       col1.innerHTML = `<div class="muted">No extracted data for: ${basename}</div>`;
     } else {
+      const n = toNorm(row);
       const personal = [
-        ['Full name', row.full_name || row.fullname || ''],
-        ['First name', row.first_name || ''],
-        ['Last name', row.last_name || ''],
-        ['Email', row.email || ''],
-        ['Phone', row.phone || ''],
+        ['Full name', n.full_name],
+        ['First name', n.first_name],
+        ['Last name', n.last_name],
+        ['Email', n.email],
+        ['Phone', n.phone],
       ];
       const professionalism = [
-        ['Misspelling count', row.misspelling_count || ''],
-        ['Misspelled words', row.misspelled_words || ''],
-        ['Visual cleanliness', row.visual_cleanliness || ''],
-        ['Professional look', row.professional_look || ''],
-        ['Formatting consistency', row.formatting_consistency || ''],
+        ['Misspelling count', n.misspelling_count],
+        ['Misspelled words', n.misspelled_words],
+        ['Visual cleanliness', n.visual_cleanliness],
+        ['Professional look', n.professional_look],
+        ['Formatting consistency', n.formatting_consistency],
       ];
       const experience = [
-        ['Years since graduation', row.years_since_graduation || ''],
-        ['Total years experience', row.total_years_experience || ''],
-        ['Employer names', row.employer_names || ''],
+        ['Years since graduation', n.years_since_graduation],
+        ['Total years experience', n.total_years_experience],
+        ['Employer names', n.employer_names],
       ];
       const stability = [
-        ['Employers count', row.employers_count || ''],
-        ['Avg years per employer', row.avg_years_per_employer || ''],
-        ['Years at current employer', row.years_at_current_employer || ''],
+        ['Employers count', n.employers_count],
+        ['Avg years per employer', n.avg_years_per_employer],
+        ['Years at current employer', n.years_at_current_employer],
       ];
       const socioeconomic = [
-        ['Address', row.address || ''],
-        ['Alma mater', row.alma_mater || ''],
-        ['High school', row.high_school || ''],
-        ['Education system', row.education_system || ''],
-        ['Second foreign language', row.second_foreign_language || ''],
+        ['Address', n.address],
+        ['Alma mater', n.alma_mater],
+        ['High school', n.high_school],
+        ['Education system', n.education_system],
+        ['Second foreign language', n.second_foreign_language],
       ];
       const flags = [
-        ['STEM degree', row.flag_stem_degree || ''],
-        ['Military service status', row.military_service_status || ''],
-        ['Worked at financial institution', row.worked_at_financial_institution || ''],
-        ['Worked for Egyptian government', row.worked_for_egyptian_government || ''],
+        ['STEM degree', n.flag_stem_degree],
+        ['Military service status', n.military_service_status],
+        ['Worked at financial institution', n.worked_at_financial_institution],
+        ['Worked for Egyptian government', n.worked_for_egyptian_government],
       ];
 
       // Put some groups in col1 and others in col2 for layout parity
@@ -142,8 +177,7 @@
       col2.innerHTML = mkTable('Experience', experience) + mkTable('Stability', stability) + mkTable('Socioeconomic Standard', socioeconomic);
     }
 
-    // Always attempt to populate Weaviate column for the selected path
-    renderWeaviateForPath(path, col3, mkTable);
+  // Weaviate readback column removed.
   }
 
   function fieldsToRow(fields) {
@@ -178,25 +212,7 @@
     };
   }
 
-  async function renderWeaviateForPath(path, col3, mkTable) {
-    try {
-      const url = '/api/weaviate/cv_by_path?path=' + encodeURIComponent(path);
-      const j = await fetchJSON(url);
-      const doc = j.document || {};
-      const sections = Array.isArray(j.sections) ? j.sections : [];
-      const props = doc.attributes || {};
-      const docPairs = [
-        ['SHA', doc.sha || ''],
-        ['Filename', doc.filename || ''],
-        ['Full text chars', (doc.full_text || '').length],
-      ];
-      const attrPairs = Object.entries(props).map(([k,v]) => [k, (Array.isArray(v)||typeof v==='object') ? JSON.stringify(v) : (v||'')]);
-      const secPairs = sections.map((s,i) => [s.section_type || `Section ${i+1}`, (s.section_text || '').slice(0, 200) + ((s.section_text||'').length>200?'...':'')]);
-      col3.innerHTML = mkTable('Weaviate Document', docPairs) + mkTable('Weaviate Attributes', attrPairs) + mkTable('Weaviate Sections', secPairs);
-    } catch (e) {
-      col3.innerHTML = `<div class="muted">Weaviate read error: ${e.message || e}</div>`;
-    }
-  }
+  // Weaviate readback renderer removed
 
   async function highlightApplicantsDuplicates(files) {
     try {
@@ -277,7 +293,7 @@
   async function refreshApplicantsExtracted() {
     try {
       setStatus('Loading extracted applicants...');
-      const r = await fetch('/api/extract', { method: 'GET' });
+      const r = await fetch('/api/applicants', { method: 'GET' });
       const j = await r.json();
       applicantsTableRows = Array.isArray(j.rows) ? j.rows : [];
       markExtractedInApplicantsList();
@@ -376,18 +392,18 @@
           renderApplicantDetailsForPath(picked[0]);
           setStatus('Pipeline completed. Displaying extracted fields and Weaviate readback.');
         } else {
-          // Fallback to CSV extract for multiple files
+          // Batch pipeline for multiple files
           await startApplicantsExtractPolling();
-          setStatus('Extracting (CSV-only) ...');
-          const r = await fetch('/api/extract', {
+          setStatus('Extracting batch ...');
+          const r = await fetch('/api/applicants/pipeline/batch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ files: picked }),
           });
           const j = await r.json();
-          if (!r.ok) throw new Error(j.error || 'Extraction failed');
+          if (!r.ok) throw new Error(j.error || 'Batch extraction failed');
           await refreshApplicantsExtracted();
-          setStatus(`Extraction completed; saved ${j.saved}.`);
+          setStatus(`Batch completed: ${j.processed} processed, ${j.errors.length} errors.`);
         }
       } catch (e) {
         console.error(e);

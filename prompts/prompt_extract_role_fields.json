@@ -1,0 +1,53 @@
+{
+  "system": "You are an expert HR analyst. Extract structured hiring information from a job description. Return only a single JSON object with the requested keys.",
+  "user": "Read the job description content and extract the required fields as a JSON object following the exact keys in 'fields'. Prefer concise strings or arrays of strings. Use integers for numeric fields where possible. If a field is missing, return an empty string or an empty array as appropriate. Do not add extra keys.",
+  "fields": [
+    "job_title",
+    "employer",
+    "job_location",
+    "language_requirement",
+    "onsite_requirement_percentage",
+    "onsite_requirement_mandatory",
+    "serves_government",
+    "serves_financial_institution",
+    "min_years_experience",
+    "must_have_skills",
+    "should_have_skills",
+    "nice_to_have_skills",
+    "min_must_have_degree",
+    "preferred_universities",
+    "responsibilities",
+    "technical_qualifications",
+    "non_technical_qualifications"
+  ],
+  "hints": {
+    "job_title": "Primary role title (e.g., Data Engineer).",
+    "employer": "Company or organization name.",
+    "job_location": "City, country, or remote.",
+    "language_requirement": "List required languages (must-have).",
+    "onsite_requirement_percentage": "Percentage of on-site work if specified (0-100).",
+    "onsite_requirement_mandatory": "Is on-site presence mandatory? yes/no or boolean.",
+    "serves_government": "Does the role serve a government client? yes/no or boolean.",
+    "serves_financial_institution": "Does the role serve a financial institution? yes/no or boolean.",
+    "min_years_experience": "Minimum years of experience required (integer if possible).",
+    "must_have_skills": "List of must-have skills.",
+    "should_have_skills": "List of should-have skills.",
+    "nice_to_have_skills": "List of nice-to-have skills.",
+    "min_must_have_degree": "Minimum required degree (BSc/MSc/PhD).",
+    "preferred_universities": "List of preferred universities if any.",
+    "responsibilities": "Bullet list of responsibilities.",
+    "technical_qualifications": "Bullet list of technical qualifications.",
+    "non_technical_qualifications": "Bullet list of non-technical qualifications (e.g. soft, consulting, sales, management skills)."
+  },
+  "instructions": [
+    "Return valid JSON only.",
+    "Use arrays of strings for list-like fields.",
+    "Use integers for numeric fields when possible.",
+    "Represent booleans as true/false when confident; otherwise use 'yes'/'no'."
+  ],
+  "formatting_rules": [
+    "Do not include markdown.",
+    "Do not include explanations.",
+    "Return only the JSON object."
+  ]
+}

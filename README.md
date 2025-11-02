@@ -1,22 +1,34 @@
 # Hire Mind
 
-HireMind orchestrates a CV extraction workflow that feeds candidate documents through the OpenAI API and consolidates normalized fields into CSV files stored under `data/`.
+HireMind orchestrates a CV extraction workflow that feeds candidate documents through the OpenAI API and stores structured data in **Weaviate** (vector database). CSV exports to `data/` are deprecated.
 
 ## Key Features
 
-- Batch CV ingestion with structured CSV export to `data/applicants.csv`
+- Batch CV ingestion with Weaviate storage (CVDocument + CVSection classes)
 - Rich server-side logging for key events (listing, picks, hashing, extraction, OpenAI calls; folder events use APPLICANTS_FOLDER and ROLES_FOLDER)
 - Flask single-page UI for browsing folders, selecting CVs, triggering extraction, and viewing results
-- UI now uses a 3-column layout: left-most column for the CV file list (with Select All and Extract), and two columns for details split into 6 titled sections (Personal Information, Experience, Stability, Professionalism, Socioeconomic Standard, Flags). Section titles are grey text above each table; tables share a consistent left-column width.
- - Roles tab mirrors the Applicants left-side layout: Roles Repository picker (path text box + Browse + Refresh) and a list of .pdf/.docx role files.
- - The folder path + Browse/Refresh control sits in the left column and matches the file list width; selected files are visually highlighted with a left accent line.
+- UI uses a 4-column layout: left-most column for CV file list (with Select All and Extract), and three detail columns displaying Personal/Professionalism/Flags, Experience/Stability/Socioeconomic, and Weaviate readback data
+- Roles tab mirrors the Applicants left-side layout: Roles Repository picker (path text box + Browse + Refresh) and a list of .pdf/.docx role files
+  - Lists now show a small ✓ icon next to already extracted items for quick scanning
+  - On Roles load, the details pane shows the first file automatically (parity with Applicants)
+- The folder path + Browse/Refresh control sits in the left column and matches the file list width; selected files are visually highlighted with a left accent line
   
-Note: the extraction pipeline is intentionally generic — it applies to both CVs (applicants) and role/job-description files. The same file-reading, OpenAI extraction, sectioning, embedding and upsert pipeline will be reused for both file types. The only differences are the downstream CSV columns/attributes and the Weaviate class properties which are mapped per-type (applicants vs roles).
+**Note:** The extraction pipeline is intentionally generic — it applies to both CVs (applicants) and role/job-description files. The same file-reading, OpenAI extraction, sectioning, embedding and upsert pipeline will be reused for both file types. The only differences are the downstream attributes and the Weaviate class properties which are mapped per-type (applicants vs roles).
+
 - Duplicate detection by content hash; clear status bar with live progress and elapsed time
-    - Duplicate highlighting marks all files in each duplicate group (both the original and its copies)
+  - Duplicate highlighting marks all files in each duplicate group (both the original and its copies)
 - OpenAI Responses API via latest SDK with automatic HTTP fallback; `text.format` set to `json_object`
- - Expanded extraction fields saved to CSV and shown in UI: Personal Information, Professionalism, Experience, Stability, Socioeconomic Standard, and Flags (see schema below)
- - Skips re-extraction for files already processed (by content hash)
+- Expanded extraction fields stored in Weaviate and shown in UI: Personal Information, Professionalism, Experience, Stability, Socioeconomic Standard, and Flags (see schema below)
+- Skips re-extraction for files already processed (by content hash)
+- **Weaviate is the single source of truth** — file list, extracted fields, embeddings, and sections all read from database
+
+## Architecture
+
+- **Data storage:** Weaviate vector database (local Docker instance or cloud)
+- **Extraction pipeline:** PDF → text → OpenAI fields → slice sections → OpenAI embeddings → Weaviate
+- **UI data flow:** File list from `/api/applicants` (queries Weaviate CVDocument), details from Weaviate readback
+- **CSV files:** Deprecated; `scripts/flush_weaviate.bat` clears both Weaviate data folder and CSV files
+- **Manual vector provision:** OpenAI embeddings attached to CVSection/RoleSection objects; Weaviate vectorizer bypassed via `SKIP_WEAVIATE_VECTORIZER_CHECK=1`
 
 ## Technology Stack
 
@@ -24,36 +36,53 @@ Note: the extraction pipeline is intentionally generic — it applies to both CV
 
 ## Important Files:
 - `app.py` – Flask app exposing the UI and API endpoints
-- `templates/index.html` – single-page UI (file list + details table + status bar)
-- `static/styles.css` – styles, including the fixed first column for the details table
+- `templates/index.html` – single-page UI (file list + 3 detail columns + status bar)
+- `static/styles.css` – styles, including the 4-column grid layout
 - `static/status.js` – shared in-app status and progress helpers used by the UI
- - `utils/csv_manager.py` – CSVStore and RolesStore encapsulating read/write of `data/applicants.csv` and `data/roles.csv`
-- `utils/openai_manager.py` – encapsulates OpenAI SDK + HTTP fallback (vector stores, file_search, text.format)
+- `utils/weaviate_store.py` – WeaviateStore encapsulating Weaviate client, schema management, and CRUD operations for CVDocument/CVSection
+- `utils/openai_manager.py` – encapsulates OpenAI SDK + HTTP fallback (field extraction, embeddings)
 - `prompts/` – unified prompt bundle used by the OpenAI extraction flow (`prompt_extract_cv_fields.json`)
 - `prompts/prompt_extract_cv_fields.json` – unified prompt bundle: `system` + `user` messages for full extraction, `fields` for ordering, `hints` for per-field guidance, `instructions`, `formatting_rules`, and an optional per-field `template`.
 - `config/.env` – runtime configuration (mirrored by `config/.env-example`)
 - `config/settings.py` – central AppConfig loader for environment and paths
 - `utils/logger.py` – AppLogger writing to `LOG_FILE_PATH` with [TIMESTAMP] and kv helper
-- `TODO.md` - developer-facing actionable task list. Keep this file in sync with
-    the README's Detailed step-by-step plan; `README.md` remains documentation
-    while `TODO.md` is for in-progress work items and small commits.
+- `scripts/flush_weaviate.bat` – batch script to clear Weaviate data folder and CSV files (reads WEAVIATE_DATA_PATH from .env)
 
 ## Quick file reference
 Brief one-line summary of core files and their primary purpose.
 
-- `app.py` — Flask server: endpoints for listing files, extracting CVs/roles, progress, and simple admin routes.
+- `app.py` — Flask server: endpoints for listing files, extracting CVs/roles via pipeline, querying Weaviate, progress tracking.
 - `templates/index.html` — Single-page UI that drives file selection, extraction actions, and displays result tables.
-- `static/main.js` / `static/roles.js` — Frontend behaviour for Applicants and Roles views (selection, extract, fetch details).
-- `static/status.js` — Shared status/progress helpers used by the UI.
+- `static/main.js` / `static/roles.js` — Frontend behaviour for Applicants and Roles views (selection, extract, fetch details from Weaviate).
 
 
 OpenAI SDK version
+ `static/status.js` — Shared status/progress helpers used by the UI.
+ `utils/weaviate_store.py` — Weaviate client wrapper with schema management, document/section CRUD, vector readback, HTTP fallbacks.
 
-- This project now targets the latest OpenAI Python SDK (see requirements.txt). The Responses API uses `text.format`; we set `text.format` to `json_object` to return structured JSON. If you previously installed a different version globally, reinstall with `python -m pip install -r requirements.txt`.
+- This project now targets the latest OpenAI Python SDK (see requirements.txt). The Responses API uses `text.format`; we set `text.format` to `json_object` to return structured JSON. Both PDF and DOCX are processed locally into plain text and sent as `input_text` (no file attachments or vector stores).
 
-Older CSVs (from before prefixing) are read with backward-compatible field mapping so existing extractions continue to show in the UI. Employer names are now mapped under Experience (fallback reads Stability_EmployerNames).
+## Data Storage
 
-## Setup for Development
+**Weaviate is the single source of truth.** All extracted fields, embeddings, and section text are stored in Weaviate.
+
+- **CVDocument** class: top-level document with sha, filename, full_text, and 30+ extracted attributes (personal info, professionalism, experience, stability, socioeconomic, flags)
+- **CVSection** class: sliced sections from the CV with title, text, parent_sha, and vector embedding (from OpenAI)
+- **CSV files** (`data/applicants.csv`, `data/roles.csv`): **Deprecated** — no longer written by pipeline; kept empty and cleared by flush script
+
+### Flush/Reset Database
+
+Use `scripts/flush_weaviate.bat` to clear all data:
+- Deletes `WEAVIATE_DATA_PATH` folder contents (default: `data/weaviate_data`)
+- Clears `applicants.csv` and `roles.csv`
+- Requires confirmation before deletion
+
+Restart Weaviate after flush:
+```cmd
+cd scripts
+stop_weaviate.bat
+run_weaviate.bat
+```
 
 #### Conda Environment
 
@@ -134,22 +163,24 @@ Notes:
 - The project is OpenAI-only and does not require local model packages.
 - Prefer running tests in the project's virtual environment (`conda activate hiremind`).
 
-End-to-end pipeline (PDF ➜ text ➜ fields ➜ sections ➜ embeddings ➜ Weaviate ➜ readback)
+End-to-end pipeline (PDF/DOCX ➜ text ➜ fields ➜ sections ➜ embeddings ➜ Weaviate ➜ readback)
 -----------------------------------------------------------------------------
 
 Run the non-interactive E2E script that performs the full 6-step pipeline and writes JSON artifacts:
 
 ```cmd
-python tests\test_e2e_extract_pdf.py
+python tests\test_e2e_extract_cv.py
 ```
 
 What it does:
-- Step 1: Extracts text from `TEST_CV_PATH` (PDF) and writes JSON.
+- Step 1: Extracts text from `TEST_CV_PATH` (PDF) or `TEST_CV_DOCX_PATH` (DOCX) and writes JSON.
 - Step 2: Calls OpenAI once to extract all fields and writes JSON.
 - Step 3: Slices text into titled sections using `utils.slice.slice_sections` and writes JSON.
 - Step 4: Computes OpenAI embeddings for each section and writes JSON.
 - Step 5: Ensures Weaviate schema, writes the CV document and upserts sections (server-side vectors).
 - Step 6: Reads back the CV and sections from Weaviate and writes a verification JSON (includes embeddings when available).
+
+When both `TEST_CV_PATH` and `TEST_CV_DOCX_PATH` are set and exist, the script runs the full pipeline twice: once for the PDF and once for the DOCX.
 
 Output artifact (override in `config/.env`):
 - `TEST_E2E_JSON` — consolidated JSON file (default `tests/e2e.json`) containing keys: `text`, `fields`, `sections`, `embeddings`, and `weaviate`.
@@ -158,26 +189,48 @@ Readback verification
 - After writing to Weaviate, the script also reads and verifies the saved document and sections:
 
 ```cmd
-python tests\test_e2e_extract_pdf.py
+python tests\test_e2e_extract_cv.py
 ```
 
 - The script will also write a separate readback report to:
     - `TEST_E2E_JSON_READ` (default `tests/e2e_read.json`) with fields: `sha`, `document`, `sections`, and `checks` (doc_ok, sections_count_ok, counts). The `document` and each item in `sections` include `_additional.vector` as `vector` when available, so you can inspect embeddings.
 
 Applicants tab enhancements
-- Extract button (single selection) now runs the full pipeline (PDF ➜ fields ➜ sections ➜ embeddings ➜ Weaviate) and shows:
-  - Extracted fields in the two details columns
-  - Weaviate document + sections in a new right-hand column
-- Multi-selection falls back to CSV-only extract as before.
+- **Extract button (single selection)** now runs the full 6-step pipeline (PDF ➜ text ➜ fields ➜ sections ➜ embeddings ➜ Weaviate ➜ readback) and shows:
+  - Extracted fields in the first two details columns (Personal/Professionalism/Flags, Experience/Stability/Socioeconomic)
+  - Weaviate document + sections in the third column
+  - Step-by-step progress in status bar (1/6, 2/6, etc.)
+- **Extract button (multi-selection)** runs batch pipeline (`/api/applicants/pipeline/batch`) which processes all selected files through the same 6-step flow
 
 Required environment:
 - `TEST_CV_PATH` — absolute path to the input PDF
+- `TEST_CV_DOCX_PATH` — absolute path to the input DOCX (optional)
 - `OPENAI_API_KEY` — for steps 2 and 4
 - `WEAVIATE_URL` (or `WEAVIATE_USE_LOCAL=true`) and `WEAVIATE_SCHEMA_PATH` — for step 5
 - Optional: `OPENAI_EMBEDDING_MODEL` (default `text-embedding-3-small`)
 
-Optional CSV dump:
-- If `TEST_CV_CSV_OUTPUT` is set, step 5 also writes a compact CSV summary of the Weaviate readback.
+Web UI and API extraction both support `.pdf` and `.docx`:
+- Single-file endpoint: `POST /api/applicants/pipeline` now extracts text from PDF via PyMuPDF and from DOCX via python-docx, then proceeds with OpenAI fields, slicing, embeddings, and Weaviate upsert.
+- Batch endpoint: `POST /api/applicants/pipeline/batch` applies the same PDF/DOCX handling per file.
+- Roles ingestion: `POST /api/roles/extract` reads PDF with PyMuPDF and DOCX with python-docx (no embeddings yet).
+
+Role E2E (PDF/DOCX ➜ text ➜ fields ➜ sections ➜ embeddings ➜ Weaviate ➜ readback)
+-----------------------------------------------------------------------------
+
+Run the roles end-to-end script:
+
+```cmd
+python tests\test_e2e_extract_role.py
+```
+
+Environment:
+- `TEST_ROLE_PATH` — absolute path to the input role PDF (optional)
+- `TEST_ROLE_DOCX_PATH` — absolute path to the input role DOCX (optional)
+- `PROMPT_EXTRACT_ROLE_FIELDS_JSON` — prompt bundle filename (default `prompt_extract_role_fields.json`)
+
+Notes:
+- The script accepts PDF/DOCX, extracts text locally, and sends text-only to OpenAI with `text.format: json_object`.
+- It computes embeddings for the full role document and each sliced section, and writes both document and sections to Weaviate. If both role paths are set, it processes both.
 
 Environment sourcing for tests
 ------------------------------
@@ -257,30 +310,75 @@ This processes a batch of questions from the file specified in QUESTIONS_PATH in
 
 ---
 
-## Weaviate integration — parallel implementation (planning only)
+## Weaviate Integration — Implementation Complete
 
-### Purpose
+### Overview
 
-This section documents a clear, step-by-step plan for adding Weaviate as a parallel vector & document store. IMPORTANT: we will not perform a migration or retire the CSV pipeline here — both systems will run in parallel during development and validation. The goal is to make Weaviate a fully-featured, optional back-end service that mirrors the CSV content (metadata + CV text + section embeddings) and provides vector search and filtered retrieval.
+**Weaviate is now the single source of truth.** CSV pipeline has been removed. All data flows through Weaviate:
 
-Schema contract: the canonical schema lives in `data/weaviate_schema.json`; point `WEAVIATE_SCHEMA_PATH` in `config/.env` to this file so the app can load and apply it at startup — the application will raise and exit if the schema file is missing or malformed.
+1. **Storage:** CVDocument and CVSection classes in Weaviate
+2. **Extraction:** Single-file (`/api/applicants/pipeline`) and batch (`/api/applicants/pipeline/batch`) endpoints
+3. **Retrieval:** UI queries `/api/applicants` to list all CVs from Weaviate
+4. **Embeddings:** OpenAI embeddings manually attached to sections; server-side vectorizer bypassed via `SKIP_WEAVIATE_VECTORIZER_CHECK=1`
 
-### High-level goals
+### Schema
 
-- Store structured OpenAI-extracted attributes (booleans/ints/strings) on a CVDocument record.
-- Store full CV text and break it into semantic sections; each section will have its own embedding and metadata.
-- Store roles as Role objects with role_text, attributes, and embeddings.
-- Keep CSV export/writes unchanged and authoritative during development; Weaviate writes are concurrent and idempotent.
+Canonical schema: `data/weaviate_schema.json` (referenced by `WEAVIATE_SCHEMA_PATH` in `.env`)
 
-Note on generic handling: the pipeline is shared for both CVs and Roles — the implementation will treat each input file the same through extraction, sectioning and embedding. A lightweight mapping layer will translate the extracted attributes into the correct CSV columns (`data/applicants.csv` vs `data/roles.csv`) and into the corresponding Weaviate class properties (`CVDocument` vs `Role`).
+**CVDocument** properties:
+- `sha` (text) — content hash, unique identifier
+- `filename` (text) — original filename
+- `full_text` (text) — complete extracted text from PDF
+- `timestamp` (text) — extraction timestamp
+- Personal: `personal_first_name`, `personal_last_name`, `personal_full_name`, `personal_email`, `personal_phone`
+- Professionalism: `professional_misspelling_count` (int), `professional_misspelled_words`, `professional_visual_cleanliness`, `professional_look`, `professional_formatting_consistency`
+- Experience: `experience_years_since_graduation` (int), `experience_total_years` (int), `experience_employer_names`
+- Stability: `stability_employers_count` (int), `stability_avg_years_per_employer`, `stability_years_at_current_employer`
+- Socioeconomic: `socio_address`, `socio_alma_mater`, `socio_high_school`, `socio_education_system`, `socio_second_foreign_language`
+- Flags: `flag_stem_degree`, `flag_military_service_status`, `flag_worked_at_financial_institution`, `flag_worked_for_egyptian_government`
 
-### Design constraints
+**CVSection** properties:
+- `parent_sha` (text) — links to CVDocument
+- `title` (text) — section header (e.g., "Summary", "Experience")
+- `text` (text) — section content
+- `vector` — OpenAI embedding (manually provided)
 
-- No CSV retirement steps in this document. All work is explicitly for parallel integration.
-- Small, testable commits are preferred. Each step below is scoped to a minimal change that can be validated independently.
-- Schema is an explicit contract stored in `data/weaviate_schema.json` (referenced by `WEAVIATE_SCHEMA_PATH`) and must be respected by the application; the app will fail fast if the schema is missing or invalid.
+### Manual Vector Provision
 
-Note on vectorization: this repository's schema uses Weaviate-native vectorization (`text2vec-transformers`) for documents and sections; ensure your Weaviate deployment enables the `text2vec-transformers` module (or update the schema to a vectorizer available in your environment).
+Weaviate server-side vectorization is **bypassed**:
+- Set `SKIP_WEAVIATE_VECTORIZER_CHECK=1` in `.env`
+- OpenAI embeddings generated via `openai_mgr.embed_texts()`
+- Vectors attached to sections during `upsert_cv_section(sha, title, text, vector=vec)`
+
+### API Endpoints
+
+- `GET /api/applicants` — list all CVDocument records (replaces CSV read)
+- `POST /api/applicants/pipeline` — single-file extraction (6 steps)
+- `POST /api/applicants/pipeline/batch` — multi-file extraction
+- `GET /api/weaviate/cv_all/<sha>` — retrieve document + sections by sha
+- `GET /api/weaviate/cv_by_path?path=...` — retrieve by file path (computes sha)
+
+### Database Management
+
+**Flush script:** `scripts/flush_weaviate.bat`
+- Reads `WEAVIATE_DATA_PATH` from `.env`
+- Deletes all folder contents
+- Clears `applicants.csv` and `roles.csv` (legacy)
+- Requires confirmation
+
+**Restart Weaviate:**
+```cmd
+cd scripts
+stop_weaviate.bat
+run_weaviate.bat
+```
+
+### Migration Notes
+
+- **CSV removed:** No longer written or read by pipeline
+- **UI updated:** File list and details now query Weaviate
+- **Batch extraction:** New `/api/applicants/pipeline/batch` endpoint replaces CSV-based multi-file extract
+- **Backward compatibility:** `csv_manager.py` kept for potential legacy imports, but unused
 
 ### Acceptance criteria (planning)
 

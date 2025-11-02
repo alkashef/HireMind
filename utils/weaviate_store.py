@@ -993,6 +993,102 @@ class WeaviateStore:
         }
         return result
 
+    def list_all_cvs(self) -> List[Dict[str, object]]:
+        """Query all CVDocument records from Weaviate and return list of simplified dicts.
+
+        Returns a list of dicts with keys: id, sha, filename, full_name, experience_total_years, etc.
+        """
+        if not self.client:
+            raise RuntimeError("Weaviate client not initialized")
+
+        props = [
+            "sha", "filename", "timestamp",
+            "personal_first_name", "personal_last_name", "personal_full_name",
+            "personal_email", "personal_phone",
+            "professional_misspelling_count", "professional_misspelled_words",
+            "professional_visual_cleanliness", "professional_look",
+            "professional_formatting_consistency",
+            "experience_years_since_graduation", "experience_total_years",
+            "experience_employer_names",
+            "stability_employers_count", "stability_avg_years_per_employer",
+            "stability_years_at_current_employer",
+            "socio_address", "socio_alma_mater", "socio_high_school",
+            "socio_education_system", "socio_second_foreign_language",
+            "flag_stem_degree", "flag_military_service_status",
+            "flag_worked_at_financial_institution",
+            "flag_worked_for_egyptian_government",
+        ]
+        result = self._query_do("CVDocument", props, where=None, additional=["id"])
+        data = result.get("data", {}) or {}
+        get = data.get("Get", {}) or {}
+        items = get.get("CVDocument", []) or []
+
+        records = []
+        for item in items:
+            props_dict = item.get("properties", {}) if "properties" in item else item
+            records.append({
+                "id": (item.get("_additional") or {}).get("id") or item.get("id"),
+                "sha": props_dict.get("sha"),
+                "filename": props_dict.get("filename"),
+                "timestamp": props_dict.get("timestamp"),
+                "personal_first_name": props_dict.get("personal_first_name"),
+                "personal_last_name": props_dict.get("personal_last_name"),
+                "personal_full_name": props_dict.get("personal_full_name"),
+                "personal_email": props_dict.get("personal_email"),
+                "personal_phone": props_dict.get("personal_phone"),
+                "professional_misspelling_count": props_dict.get("professional_misspelling_count"),
+                "professional_misspelled_words": props_dict.get("professional_misspelled_words"),
+                "professional_visual_cleanliness": props_dict.get("professional_visual_cleanliness"),
+                "professional_look": props_dict.get("professional_look"),
+                "professional_formatting_consistency": props_dict.get("professional_formatting_consistency"),
+                "experience_years_since_graduation": props_dict.get("experience_years_since_graduation"),
+                "experience_total_years": props_dict.get("experience_total_years"),
+                "experience_employer_names": props_dict.get("experience_employer_names"),
+                "stability_employers_count": props_dict.get("stability_employers_count"),
+                "stability_avg_years_per_employer": props_dict.get("stability_avg_years_per_employer"),
+                "stability_years_at_current_employer": props_dict.get("stability_years_at_current_employer"),
+                "socio_address": props_dict.get("socio_address"),
+                "socio_alma_mater": props_dict.get("socio_alma_mater"),
+                "socio_high_school": props_dict.get("socio_high_school"),
+                "socio_education_system": props_dict.get("socio_education_system"),
+                "socio_second_foreign_language": props_dict.get("socio_second_foreign_language"),
+                "flag_stem_degree": props_dict.get("flag_stem_degree"),
+                "flag_military_service_status": props_dict.get("flag_military_service_status"),
+                "flag_worked_at_financial_institution": props_dict.get("flag_worked_at_financial_institution"),
+                "flag_worked_for_egyptian_government": props_dict.get("flag_worked_for_egyptian_government"),
+            })
+        return records
+
+    def list_all_roles(self) -> List[Dict[str, object]]:
+        """Query all RoleDocument records from Weaviate.
+
+        Returns list of dicts with keys: sha, filename, timestamp, role_title, id.
+        """
+        if not self.client:
+            raise RuntimeError("Weaviate client not initialized")
+
+        props = [
+            "sha", "filename", "timestamp", "role_title",
+            "job_title", "employer", "job_location"
+        ]
+        result = self._query_do("RoleDocument", props, where=None, additional=["id"])
+        data = result.get("data", {}) or {}
+        items = (data.get("Get", {}) or {}).get("RoleDocument", []) or []
+        records = []
+        for item in items:
+            props_dict = item.get("properties", {}) if "properties" in item else item
+            records.append({
+                "id": (item.get("_additional") or {}).get("id") or item.get("id"),
+                "sha": props_dict.get("sha"),
+                "filename": props_dict.get("filename"),
+                "timestamp": props_dict.get("timestamp"),
+                "role_title": props_dict.get("role_title"),
+                "job_title": props_dict.get("job_title"),
+                "employer": props_dict.get("employer"),
+                "job_location": props_dict.get("job_location"),
+            })
+        return records
+
     # ------------------------- sections & processing -----------------------
     def _split_into_sections(self, text: str, max_chars: int = 800) -> List[dict]:
         """Deterministic text splitter used to create section candidates.
@@ -1094,12 +1190,38 @@ class WeaviateStore:
         if not self.client:
             raise RuntimeError("Weaviate client not initialized")
 
+        # Normalize list-like fields to comma-separated strings for text fields
+        def _norm_list(v):
+            if isinstance(v, list):
+                return ", ".join(str(x) for x in v)
+            return v
+
         props = {
             "sha": sha,
             "timestamp": attributes.get("timestamp", ""),
             "filename": filename,
             "role_title": attributes.get("role_title", ""),
             "full_text": full_text,
+            # Allow callers to attach client-provided vectors via special key
+            "_vector": attributes.get("_vector") if isinstance(attributes, dict) else None,
+            # Extended role fields (optional)
+            "job_title": attributes.get("job_title", ""),
+            "employer": attributes.get("employer", ""),
+            "job_location": attributes.get("job_location", ""),
+            "language_requirement": _norm_list(attributes.get("language_requirement", "")),
+            "onsite_requirement_percentage": attributes.get("onsite_requirement_percentage", None),
+            "onsite_requirement_mandatory": attributes.get("onsite_requirement_mandatory", ""),
+            "serves_government": attributes.get("serves_government", ""),
+            "serves_financial_institution": attributes.get("serves_financial_institution", ""),
+            "min_years_experience": attributes.get("min_years_experience", None),
+            "must_have_skills": _norm_list(attributes.get("must_have_skills", "")),
+            "should_have_skills": _norm_list(attributes.get("should_have_skills", "")),
+            "nice_to_have_skills": _norm_list(attributes.get("nice_to_have_skills", "")),
+            "min_must_have_degree": attributes.get("min_must_have_degree", ""),
+            "preferred_universities": _norm_list(attributes.get("preferred_universities", "")),
+            "responsibilities": _norm_list(attributes.get("responsibilities", "")),
+            "technical_qualifications": _norm_list(attributes.get("technical_qualifications", "")),
+            "non_technical_qualifications": _norm_list(attributes.get("non_technical_qualifications", "")),
         }
 
         found = None
@@ -1129,7 +1251,20 @@ class WeaviateStore:
 
         try:
             where = {"path": ["sha"], "operator": "Equal", "valueString": sha}
-            res = self._query_do("RoleDocument", ["sha", "filename", "role_title", "full_text"], where, additional=["id"])
+            res = self._query_do(
+                "RoleDocument",
+                [
+                    "sha", "filename", "role_title", "full_text",
+                    "job_title", "employer", "job_location", "language_requirement",
+                    "onsite_requirement_percentage", "onsite_requirement_mandatory",
+                    "serves_government", "serves_financial_institution",
+                    "min_years_experience", "must_have_skills", "should_have_skills",
+                    "nice_to_have_skills", "min_must_have_degree", "preferred_universities",
+                    "responsibilities", "technical_qualifications", "non_technical_qualifications",
+                ],
+                where,
+                additional=["id"]
+            )
             items = res.get("data", {}).get("Get", {}).get("RoleDocument", [])
             if not items:
                 return None
@@ -1138,18 +1273,39 @@ class WeaviateStore:
                 "id": first.get("_additional", {}).get("id") or first.get("id"),
                 "sha": first.get("sha"),
                 "filename": first.get("filename"),
-                "attributes": {"role_title": first.get("role_title")},
+                "attributes": {
+                    "role_title": first.get("role_title"),
+                    "job_title": first.get("job_title"),
+                    "employer": first.get("employer"),
+                    "job_location": first.get("job_location"),
+                    "language_requirement": first.get("language_requirement"),
+                    "onsite_requirement_percentage": first.get("onsite_requirement_percentage"),
+                    "onsite_requirement_mandatory": first.get("onsite_requirement_mandatory"),
+                    "serves_government": first.get("serves_government"),
+                    "serves_financial_institution": first.get("serves_financial_institution"),
+                    "min_years_experience": first.get("min_years_experience"),
+                    "must_have_skills": first.get("must_have_skills"),
+                    "should_have_skills": first.get("should_have_skills"),
+                    "nice_to_have_skills": first.get("nice_to_have_skills"),
+                    "min_must_have_degree": first.get("min_must_have_degree"),
+                    "preferred_universities": first.get("preferred_universities"),
+                    "responsibilities": first.get("responsibilities"),
+                    "technical_qualifications": first.get("technical_qualifications"),
+                    "non_technical_qualifications": first.get("non_technical_qualifications"),
+                },
                 "full_text": first.get("full_text"),
             }
         except Exception as e:
             self.logger.log_kv("WEAVIATE_ROLE_READ_ERROR", error=str(e), sha=sha)
             return None
 
-    def upsert_role_section(self, parent_sha: str, section_type: str, section_text: str) -> Dict[str, object]:
-        """Create or update a RoleSection object; mirrors CV section upsert."""
+    def upsert_role_section(self, parent_sha: str, section_type: str, section_text: str, vector: Optional[list] = None) -> Dict[str, object]:
+        """Create or update a RoleSection object; mirrors CV section upsert. Accepts optional vector."""
         if not self.client:
             return {"id": None, "created": False, "weaviate_ok": False}
         props = {"parent_sha": parent_sha, "section_type": section_type, "section_text": section_text}
+        if vector is not None:
+            props["_vector"] = vector
         try:
             # simple dedupe by parent + exact section_text
             where = {"path": ["parent_sha"], "operator": "Equal", "valueString": parent_sha}
@@ -1170,6 +1326,36 @@ class WeaviateStore:
         except Exception as e:
             self.logger.log_kv("WEAVIATE_ROLESECTION_UPSERT_ERROR", error=str(e), parent_sha=parent_sha)
             return {"id": None, "created": False, "weaviate_ok": False}
+
+    def read_role_sections(self, parent_sha: str) -> List[Dict[str, object]]:
+        """Return all RoleSection rows for a given parent_sha.
+
+        Shape: [{id, parent_sha, section_type, section_text, vector?}]
+        """
+        if not self.client:
+            raise RuntimeError("Weaviate client not initialized")
+        try:
+            where = {"path": ["parent_sha"], "operator": "Equal", "valueString": parent_sha}
+            res = self._query_do(
+                "RoleSection",
+                ["parent_sha", "section_type", "section_text"],
+                where,
+                additional=["id", "vector"],
+            )
+            items = res.get("data", {}).get("Get", {}).get("RoleSection", [])
+            out: List[Dict[str, object]] = []
+            for it in items:
+                out.append({
+                    "id": (it.get("_additional") or {}).get("id") or it.get("id"),
+                    "parent_sha": it.get("parent_sha"),
+                    "section_type": it.get("section_type"),
+                    "section_text": it.get("section_text"),
+                    "vector": (it.get("_additional") or {}).get("vector"),
+                })
+            return out
+        except Exception as e:
+            self.logger.log_kv("WEAVIATE_READ_ROLE_SECTIONS_ERROR", error=str(e), parent_sha=parent_sha)
+            return []
 
     def process_file_and_upsert(self, path: Path, is_role: bool = False) -> Dict[str, object]:
         """Orchestrate extract -> split -> embed -> upsert.

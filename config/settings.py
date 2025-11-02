@@ -163,3 +163,8 @@ class AppConfig:
     def prompt_extract_cv_fields_json(self) -> str:
         """Filename of consolidated per-field extraction prompt (JSON with template + hints)."""
         return os.getenv("PROMPT_EXTRACT_CV_FIELDS_JSON", "prompt_extract_cv_fields.json")
+
+    @property
+    def prompt_extract_role_fields_json(self) -> str:
+        """Filename of consolidated role extraction prompt (JSON with template + hints)."""
+        return os.getenv("PROMPT_EXTRACT_ROLE_FIELDS_JSON", "prompt_extract_role_fields.json")

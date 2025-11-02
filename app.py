@@ -13,7 +13,6 @@ from flask import Flask, jsonify, render_template, request
 from config.settings import AppConfig
 from utils.logger import AppLogger
 from utils.openai_manager import OpenAIManager
-from utils.csv_manager import CSVStore, RolesStore
 
 
 app = Flask(__name__)
@@ -22,8 +21,6 @@ app = Flask(__name__)
 config = AppConfig()
 logger = AppLogger(config.log_file_path)
 openai_mgr = OpenAIManager(config, logger)
-csv_store = CSVStore(config, logger)
-roles_store = RolesStore(config, logger)
 
 # In-memory extraction progress (per-process state)
 EXTRACT_PROGRESS: dict = {"active": False, "total": 0, "done": 0, "start": None}
@@ -287,14 +284,19 @@ def api_roles_pick_folder():
 
 @app.route("/api/roles/extract", methods=["POST", "GET"])
 def api_roles_extract():
-    """Persist selected role files to CSV under data/roles.csv.
+    """Ingest role files into Weaviate (RoleDocument) and report status.
 
-    Body: { "files": ["C:/path/file1.pdf", ...] }
-    Columns: ID (sha256), Timestamp, Filename, RoleTitle (parsed from filename by default)
+    GET: returns { rows: [ { filename, sha, role_title, timestamp }, ... ] } from Weaviate
+    POST body: { "files": ["C:/path/file1.pdf", ...] } processes files and upserts RoleDocument entries
     """
     try:
         if request.method == "GET":
-            rows = roles_store.get_public_rows()
+            os.environ.setdefault("SKIP_WEAVIATE_VECTORIZER_CHECK", "1")
+            from utils.weaviate_store import WeaviateStore
+            ws = WeaviateStore()
+            recs = ws.list_all_roles()
+            # roles.js expects rows with at least 'filename' for marking extracted
+            rows = [{"filename": r.get("filename"), "sha": r.get("sha"), "role_title": r.get("role_title"), "timestamp": r.get("timestamp")} for r in recs]
             log_kv("ROLES_EXTRACT_GET", rows=len(rows))
             return jsonify({"rows": rows})
 
@@ -302,18 +304,19 @@ def api_roles_extract():
         files = payload.get("files") or []
 
         saved = 0
+        errors: list[str] = []
         stamp = datetime.now().isoformat()
-        log_kv("ROLES_EXTRACT_POST_START", files=len(files), csv=str(roles_store.csv_path))
+        log_kv("ROLES_EXTRACT_POST_START", files=len(files))
         ROLES_EXTRACT_PROGRESS.update({
             "active": True,
             "total": len(files),
             "done": 0,
             "start": datetime.now().timestamp(),
         })
-
-        index_by_id: dict[str, dict] = roles_store.read_index()
-        updated_by_id: dict[str, dict] = dict(index_by_id)
-        errors: list[str] = []
+        os.environ.setdefault("SKIP_WEAVIATE_VECTORIZER_CHECK", "1")
+        from utils.weaviate_store import WeaviateStore
+        ws = WeaviateStore()
+        ws.ensure_schema()
 
         for fp in files:
             p = Path(fp)
@@ -323,24 +326,28 @@ def api_roles_extract():
                     log_kv("ROLES_EXTRACT_SKIP_NOTFOUND", path=str(p))
                     continue
                 rid = sha256_file(p)
-                filename = p.name
-                # Default role title: filename without extension
-                role_title = p.stem
-
-                if rid in updated_by_id:
-                    log_kv("ROLES_EXTRACT_SKIP_ALREADY_DONE", id=rid, file=filename)
-                    continue
-
-                row = {
-                    "ID": rid,
-                    "Timestamp": stamp,
-                    "Filename": filename,
-                    "RoleTitle": role_title,
-                }
-                if rid not in updated_by_id:
+                # Skip if exists
+                existing = ws.read_role_from_db(rid)
+                if existing:
+                    log_kv("ROLES_EXTRACT_SKIP_ALREADY_DONE", id=rid, file=p.name)
+                else:
+                    # Minimal ingestion for roles (no embeddings yet)
+                    text = ""
+                    try:
+                        from utils.extractors import pdf_to_text, docx_to_text
+                        ext = p.suffix.lower()
+                        if ext == ".pdf":
+                            text = pdf_to_text(p)
+                        elif ext == ".docx":
+                            text = docx_to_text(p)
+                        else:
+                            text = p.read_text(encoding="utf-8", errors="ignore")
+                    except Exception:
+                        text = p.read_text(encoding="utf-8", errors="ignore")
+                    attrs = {"timestamp": stamp, "role_title": p.stem}
+                    ws.write_role_to_db(rid, p.name, text, attrs)
                     saved += 1
-                    log_kv("ROLES_EXTRACT_ROW_NEW", id=rid, file=filename)
-                updated_by_id[rid] = row
+                    log_kv("ROLES_EXTRACT_ROW_NEW", id=rid, file=p.name)
             except Exception as e:
                 errors.append(f"General error [{p.name}]: {e}")
                 log_kv("ROLES_EXTRACT_FILE_ERROR", name=p.name, error=e)
@@ -352,11 +359,9 @@ def api_roles_extract():
                     )
                 except Exception:
                     pass
-
-        roles_store.write_rows(updated_by_id)
         ROLES_EXTRACT_PROGRESS.update({"active": False})
-        log_kv("ROLES_EXTRACT_POST_DONE", saved=saved, errors=len(errors), csv=str(roles_store.csv_path), total_rows=len(updated_by_id))
-        return jsonify({"saved": saved, "csv": str(roles_store.csv_path), "errors": errors})
+        log_kv("ROLES_EXTRACT_POST_DONE", saved=saved, errors=len(errors))
+        return jsonify({"saved": saved, "errors": errors})
     except Exception as e:
         log(f"Roles extract error: {e}")
         ROLES_EXTRACT_PROGRESS.update({"active": False})
@@ -375,6 +380,247 @@ def api_roles_extract_progress():
     except Exception as e:
         log_kv("ROLES_EXTRACT_PROGRESS_ERROR", error=e)
         return jsonify({"active": False, "total": 0, "done": 0, "start": None})
+
+
+@app.route("/api/roles/pipeline", methods=["POST"])
+def api_roles_pipeline():
+    """Run the 6-step pipeline for a single selected Role file and return artifacts.
+
+    Body: { "file": "C:/path/role.pdf" }
+    Returns: { sha, filename, fields, sections, embeddings_model, weaviate: { ok, id }, readback: { document, sections } }
+    """
+    payload = request.get_json(silent=True) or {}
+    fpath = payload.get("file")
+    if not fpath:
+        return jsonify({"error": "file is required"}), 400
+    p = Path(fpath)
+    if not p.exists() or not p.is_file():
+        return jsonify({"error": "file not found"}), 404
+
+    # Step 1: extract text and sha
+    log_kv("ROLE_PIPELINE_STEP", step="1/6", action="extract_text")
+    text = ''
+    sha = sha256_file(p)
+    try:
+        from utils.extractors import pdf_to_text, docx_to_text
+        ext = p.suffix.lower()
+        if ext == ".pdf":
+            text = pdf_to_text(p)
+        elif ext == ".docx":
+            text = docx_to_text(p)
+        else:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+    except Exception as e:
+        return jsonify({"error": f"extract failed: {e}"}), 500
+
+    # Step 2: OpenAI extract role fields
+    log_kv("ROLE_PIPELINE_STEP", step="2/6", action="openai_extract_fields")
+    fields, err = openai_mgr.extract_role_fields(p)
+    if err:
+        return jsonify({"error": f"openai extract failed: {err}"}), 500
+
+    # Step 3: slice sections
+    log_kv("ROLE_PIPELINE_STEP", step="3/6", action="slice_sections")
+    from utils.slice import slice_sections
+    sections_map = slice_sections(text)
+
+    # Step 4: embeddings for doc + sections
+    log_kv("ROLE_PIPELINE_STEP", step="4/6", action="openai_embeddings")
+    titles = list(sections_map.keys())
+    texts = [sections_map[t] for t in titles]
+    # doc embedding
+    doc_vecs, err0 = openai_mgr.embed_texts([text])
+    if err0:
+        return jsonify({"error": f"embeddings failed (doc): {err0}"}), 500
+    doc_vector = doc_vecs[0] if doc_vecs else []
+    # sections embeddings
+    vectors, err2 = openai_mgr.embed_texts(texts)
+    if err2:
+        return jsonify({"error": f"embeddings failed (sections): {err2}"}), 500
+    emb_model = os.getenv("OPENAI_EMBEDDING_MODEL") or "text-embedding-3-small"
+
+    # Step 5 & 6: write to Weaviate using vectors and then read back
+    log_kv("ROLE_PIPELINE_STEP", step="5/6", action="write_weaviate")
+    os.environ.setdefault("SKIP_WEAVIATE_VECTORIZER_CHECK", "1")
+    from utils.weaviate_store import WeaviateStore
+    ws = WeaviateStore()
+    ws.ensure_schema()
+
+    # Map fields into RoleDocument attributes expected by write_role_to_db
+    def rget(k: str):
+        v = (fields or {}).get(k)
+        return v
+
+    attrs = {
+        "timestamp": datetime.now().isoformat(),
+        "role_title": (fields or {}).get("job_title") or p.stem,
+        "job_title": rget("job_title") or p.stem,
+        "employer": rget("employer") or "",
+        "job_location": rget("job_location") or "",
+        "language_requirement": rget("language_requirement") or "",
+        "onsite_requirement_percentage": rget("onsite_requirement_percentage"),
+        "onsite_requirement_mandatory": rget("onsite_requirement_mandatory") or "",
+        "serves_government": rget("serves_government") or "",
+        "serves_financial_institution": rget("serves_financial_institution") or "",
+        "min_years_experience": rget("min_years_experience"),
+        "must_have_skills": rget("must_have_skills") or "",
+        "should_have_skills": rget("should_have_skills") or "",
+        "nice_to_have_skills": rget("nice_to_have_skills") or "",
+        "min_must_have_degree": rget("min_must_have_degree") or "",
+        "preferred_universities": rget("preferred_universities") or "",
+        "responsibilities": rget("responsibilities") or "",
+        "technical_qualifications": rget("technical_qualifications") or "",
+        "non_technical_qualifications": rget("non_technical_qualifications") or "",
+        "_vector": doc_vector if doc_vector else None,
+    }
+    doc_res = ws.write_role_to_db(sha, p.name, text, attrs)
+
+    # Upsert sections with vectors
+    for idx, title in enumerate(titles):
+        sec_text = sections_map[title]
+        vec = vectors[idx] if vectors and idx < len(vectors) else None
+        ws.upsert_role_section(sha, title, sec_text, vector=vec)
+
+    # Readback
+    log_kv("ROLE_PIPELINE_STEP", step="6/6", action="readback_weaviate")
+    doc = ws.read_role_from_db(sha)
+    secs = ws.read_role_sections(sha)
+
+    log_kv("ROLE_PIPELINE_COMPLETE", sha=sha, filename=p.name)
+    return jsonify({
+        "sha": sha,
+        "filename": p.name,
+        "fields": fields or {},
+        "sections": sections_map,
+        "embeddings_model": emb_model,
+        "weaviate": {"ok": True, "id": (doc_res or {}).get("id")},
+        "readback": {"document": doc, "sections": secs},
+    })
+
+
+@app.route("/api/roles/pipeline/batch", methods=["POST"])
+def api_roles_pipeline_batch():
+    """Run pipeline for multiple Roles in batch mode.
+
+    Body: { "files": ["C:/path/role1.pdf", ...] }
+    Returns: { processed: int, errors: [str] }
+    """
+    payload = request.get_json(silent=True) or {}
+    files = payload.get("files") or []
+    if not files:
+        return jsonify({"error": "files array required"}), 400
+
+    log_kv("ROLE_BATCH_START", count=len(files))
+    ROLES_EXTRACT_PROGRESS.update({
+        "active": True,
+        "total": len(files),
+        "done": 0,
+        "start": datetime.now().timestamp(),
+    })
+
+    processed = 0
+    errors: list[str] = []
+    max_bytes = get_max_file_mb() * 1024 * 1024
+    os.environ.setdefault("SKIP_WEAVIATE_VECTORIZER_CHECK", "1")
+    from utils.weaviate_store import WeaviateStore
+    from utils.extractors import pdf_to_text, docx_to_text
+    from utils.slice import slice_sections
+    ws = WeaviateStore()
+    ws.ensure_schema()
+
+    for fpath in files:
+        try:
+            p = Path(fpath)
+            if not p.exists() or not p.is_file():
+                errors.append(f"Not found: {p.name}")
+                continue
+            if p.stat().st_size > max_bytes:
+                errors.append(f"File too large: {p.name}")
+                continue
+
+            sha = sha256_file(p)
+            # Skip if already exists
+            existing = ws.read_role_from_db(sha)
+            if existing:
+                log_kv("ROLE_BATCH_SKIP_EXISTS", sha=sha, filename=p.name)
+                continue
+
+            # Extract text
+            ext = p.suffix.lower()
+            if ext == ".pdf":
+                text = pdf_to_text(p)
+            elif ext == ".docx":
+                text = docx_to_text(p)
+            else:
+                text = p.read_text(encoding="utf-8", errors="ignore")
+
+            # OpenAI fields
+            fields, err = openai_mgr.extract_role_fields(p)
+            if err:
+                errors.append(f"{p.name}: {err}")
+                continue
+
+            # Sections and embeddings
+            sections_map = slice_sections(text)
+            titles = list(sections_map.keys())
+            texts = [sections_map[t] for t in titles]
+            doc_vecs, err0 = openai_mgr.embed_texts([text])
+            if err0:
+                errors.append(f"{p.name} embeddings(doc): {err0}")
+                continue
+            doc_vector = doc_vecs[0] if doc_vecs else []
+            vectors, err2 = openai_mgr.embed_texts(texts)
+            if err2:
+                errors.append(f"{p.name} embeddings(sections): {err2}")
+                continue
+
+            def rget(k: str):
+                v = (fields or {}).get(k)
+                return v
+
+            attrs = {
+                "timestamp": datetime.now().isoformat(),
+                "role_title": (fields or {}).get("job_title") or p.stem,
+                "job_title": rget("job_title") or p.stem,
+                "employer": rget("employer") or "",
+                "job_location": rget("job_location") or "",
+                "language_requirement": rget("language_requirement") or "",
+                "onsite_requirement_percentage": rget("onsite_requirement_percentage"),
+                "onsite_requirement_mandatory": rget("onsite_requirement_mandatory") or "",
+                "serves_government": rget("serves_government") or "",
+                "serves_financial_institution": rget("serves_financial_institution") or "",
+                "min_years_experience": rget("min_years_experience"),
+                "must_have_skills": rget("must_have_skills") or "",
+                "should_have_skills": rget("should_have_skills") or "",
+                "nice_to_have_skills": rget("nice_to_have_skills") or "",
+                "min_must_have_degree": rget("min_must_have_degree") or "",
+                "preferred_universities": rget("preferred_universities") or "",
+                "responsibilities": rget("responsibilities") or "",
+                "technical_qualifications": rget("technical_qualifications") or "",
+                "non_technical_qualifications": rget("non_technical_qualifications") or "",
+                "_vector": doc_vector if doc_vector else None,
+            }
+            ws.write_role_to_db(sha, p.name, text, attrs)
+
+            for idx, title in enumerate(titles):
+                sec_text = sections_map[title]
+                vec = vectors[idx] if vectors and idx < len(vectors) else None
+                ws.upsert_role_section(sha, title, sec_text, vector=vec)
+
+            processed += 1
+            log_kv("ROLE_BATCH_PROCESSED", sha=sha, filename=p.name)
+        except Exception as e:
+            errors.append(f"{Path(fpath).name}: {e}")
+            log_kv("ROLE_BATCH_ERROR", file=fpath, error=str(e))
+        finally:
+            ROLES_EXTRACT_PROGRESS["done"] = min(
+                int(ROLES_EXTRACT_PROGRESS.get("done", 0)) + 1,
+                int(ROLES_EXTRACT_PROGRESS.get("total", 0))
+            )
+
+    ROLES_EXTRACT_PROGRESS.update({"active": False})
+    log_kv("ROLE_BATCH_COMPLETE", processed=processed, errors=len(errors))
+    return jsonify({"processed": processed, "errors": errors})
 
 
 @app.route("/api/hashes", methods=["POST"])
@@ -590,10 +836,17 @@ def api_applicants_pipeline():
     text = ''
     sha = sha256_file(p)
     try:
-        from utils.extractors import pdf_to_text
-        text = pdf_to_text(p)
+        from utils.extractors import pdf_to_text, docx_to_text
+        ext = p.suffix.lower()
+        if ext == ".pdf":
+            text = pdf_to_text(p)
+        elif ext == ".docx":
+            text = docx_to_text(p)
+        else:
+            # best-effort plain text for unknown types
+            text = p.read_text(encoding="utf-8", errors="ignore")
     except Exception as e:
-        return jsonify({"error": f"pdf extract failed: {e}"}), 500
+        return jsonify({"error": f"extract failed: {e}"}), 500
 
     # Step 2: OpenAI extract fields
     log_kv("PIPELINE_STEP", step="2/6", action="openai_extract_fields")
@@ -682,6 +935,132 @@ def api_applicants_pipeline():
     })
 
 
+@app.route("/api/applicants/pipeline/batch", methods=["POST"])
+def api_applicants_pipeline_batch():
+    """Run pipeline for multiple CVs in batch mode.
+
+    Body: { "files": ["C:/path/file1.pdf", ...] }
+    Returns: { processed: int, errors: [str], }
+    """
+    payload = request.get_json(silent=True) or {}
+    files = payload.get("files") or []
+    if not files:
+        return jsonify({"error": "files array required"}), 400
+
+    log_kv("BATCH_PIPELINE_START", count=len(files))
+    EXTRACT_PROGRESS.update({
+        "active": True,
+        "total": len(files),
+        "done": 0,
+        "start": datetime.now().timestamp(),
+    })
+
+    processed = 0
+    errors = []
+    max_bytes = get_max_file_mb() * 1024 * 1024
+    os.environ.setdefault("SKIP_WEAVIATE_VECTORIZER_CHECK", "1")
+    from utils.weaviate_store import WeaviateStore
+    from utils.extractors import pdf_to_text, docx_to_text
+    from utils.slice import slice_sections
+    ws = WeaviateStore()
+    ws.ensure_schema()
+
+    for fpath in files:
+        try:
+            p = Path(fpath)
+            if not p.exists() or not p.is_file():
+                errors.append(f"Not found: {p.name}")
+                continue
+            if p.stat().st_size > max_bytes:
+                errors.append(f"File too large: {p.name}")
+                continue
+
+            sha = sha256_file(p)
+            # Skip if already exists in Weaviate
+            existing = ws.read_cv_from_db(sha)
+            if existing:
+                log_kv("BATCH_SKIP_EXISTS", sha=sha, filename=p.name)
+                continue
+
+            # Extract, slice, embed, write
+            ext = p.suffix.lower()
+            if ext == ".pdf":
+                text = pdf_to_text(p)
+            elif ext == ".docx":
+                text = docx_to_text(p)
+            else:
+                text = p.read_text(encoding="utf-8", errors="ignore")
+            fields, err = openai_mgr.extract_full_name(p)
+            if err:
+                errors.append(f"{p.name}: {err}")
+                continue
+
+            sections_map = slice_sections(text)
+            titles = list(sections_map.keys())
+            texts = [sections_map[t] for t in titles]
+            vectors, err2 = openai_mgr.embed_texts(texts)
+            if err2:
+                errors.append(f"{p.name} embeddings: {err2}")
+                continue
+
+            def fget(k: str) -> str:
+                v = (fields or {}).get(k)
+                if isinstance(v, list):
+                    return ", ".join(str(x) for x in v)
+                return '' if v is None else str(v)
+
+            attrs = {
+                "timestamp": datetime.now().isoformat(),
+                "cv": p.name,
+                "personal_first_name": fget("first_name"),
+                "personal_last_name": fget("last_name"),
+                "personal_full_name": fget("full_name"),
+                "personal_email": fget("email"),
+                "personal_phone": fget("phone"),
+                "professional_misspelling_count": int(fields.get("misspelling_count")) if str(fields.get("misspelling_count", "")).isdigit() else None,
+                "professional_misspelled_words": fget("misspelled_words"),
+                "professional_visual_cleanliness": fget("visual_cleanliness"),
+                "professional_look": fget("professional_look"),
+                "professional_formatting_consistency": fget("formatting_consistency"),
+                "experience_years_since_graduation": int(fields.get("years_since_graduation")) if str(fields.get("years_since_graduation", "")).isdigit() else None,
+                "experience_total_years": int(fields.get("total_years_experience")) if str(fields.get("total_years_experience", "")).isdigit() else None,
+                "experience_employer_names": fget("employer_names"),
+                "stability_employers_count": int(fields.get("employers_count")) if str(fields.get("employers_count", "")).isdigit() else None,
+                "stability_avg_years_per_employer": fget("avg_years_per_employer"),
+                "stability_years_at_current_employer": fget("years_at_current_employer"),
+                "socio_address": fget("address"),
+                "socio_alma_mater": fget("alma_mater"),
+                "socio_high_school": fget("high_school"),
+                "socio_education_system": fget("education_system"),
+                "socio_second_foreign_language": fget("second_foreign_language"),
+                "flag_stem_degree": fget("flag_stem_degree"),
+                "flag_military_service_status": fget("military_service_status"),
+                "flag_worked_at_financial_institution": fget("worked_at_financial_institution"),
+                "flag_worked_for_egyptian_government": fget("worked_for_egyptian_government"),
+            }
+            ws.write_cv_to_db(sha, p.name, text, attrs)
+
+            for idx, title in enumerate(titles):
+                sec_text = sections_map[title]
+                vec = vectors[idx] if vectors and idx < len(vectors) else None
+                ws.upsert_cv_section(sha, title, sec_text, vector=vec)
+
+            processed += 1
+            log_kv("BATCH_PROCESSED", sha=sha, filename=p.name)
+        except Exception as e:
+            errors.append(f"{Path(fpath).name}: {e}")
+            log_kv("BATCH_ERROR", file=fpath, error=str(e))
+        finally:
+            EXTRACT_PROGRESS["done"] = min(
+                int(EXTRACT_PROGRESS.get("done", 0)) + 1,
+                int(EXTRACT_PROGRESS.get("total", 0))
+            )
+
+    EXTRACT_PROGRESS.update({"active": False})
+    log_kv("BATCH_PIPELINE_COMPLETE", processed=processed, errors=len(errors))
+    return jsonify({"processed": processed, "errors": errors})
+
+
 @app.route("/api/extract/progress")
 def api_extract_progress():
     """Return current extraction progress.
@@ -698,6 +1077,60 @@ def api_extract_progress():
     except Exception as e:
         log_kv("EXTRACT_PROGRESS_ERROR", error=e)
         return jsonify({"active": False, "total": 0, "done": 0, "start": None})
+
+
+@app.route("/api/applicants", methods=["GET"])
+def api_applicants():
+    """Return list of all applicants from Weaviate CVDocument records.
+
+    Returns: { rows: [ { cv, filename, sha, full_name, ... }, ... ] }
+    """
+    try:
+        os.environ.setdefault("SKIP_WEAVIATE_VECTORIZER_CHECK", "1")
+        from utils.weaviate_store import WeaviateStore
+        ws = WeaviateStore()
+        records = ws.list_all_cvs()
+        
+        # Map Weaviate records to UI-friendly row format matching old CSV structure
+        rows = []
+        for rec in records:
+            rows.append({
+                "ID": rec.get("sha"),
+                "cv": rec.get("filename"),
+                "Filename": rec.get("filename"),
+                "Timestamp": rec.get("timestamp"),
+                "PersonalInformation_FirstName": rec.get("personal_first_name"),
+                "PersonalInformation_LastName": rec.get("personal_last_name"),
+                "PersonalInformation_FullName": rec.get("personal_full_name"),
+                "PersonalInformation_Email": rec.get("personal_email"),
+                "PersonalInformation_Phone": rec.get("personal_phone"),
+                "Professionalism_MisspellingCount": rec.get("professional_misspelling_count"),
+                "Professionalism_MisspelledWords": rec.get("professional_misspelled_words"),
+                "Professionalism_VisualCleanliness": rec.get("professional_visual_cleanliness"),
+                "Professionalism_ProfessionalLook": rec.get("professional_look"),
+                "Professionalism_FormattingConsistency": rec.get("professional_formatting_consistency"),
+                "Experience_YearsSinceGraduation": rec.get("experience_years_since_graduation"),
+                "Experience_TotalYearsExperience": rec.get("experience_total_years"),
+                "Experience_EmployerNames": rec.get("experience_employer_names"),
+                "Stability_EmployersCount": rec.get("stability_employers_count"),
+                "Stability_AvgYearsPerEmployer": rec.get("stability_avg_years_per_employer"),
+                "Stability_YearsAtCurrentEmployer": rec.get("stability_years_at_current_employer"),
+                "SocioeconomicStandard_Address": rec.get("socio_address"),
+                "SocioeconomicStandard_AlmaMater": rec.get("socio_alma_mater"),
+                "SocioeconomicStandard_HighSchool": rec.get("socio_high_school"),
+                "SocioeconomicStandard_EducationSystem": rec.get("socio_education_system"),
+                "SocioeconomicStandard_SecondForeignLanguage": rec.get("socio_second_foreign_language"),
+                "Flags_FlagSTEMDegree": rec.get("flag_stem_degree"),
+                "Flags_MilitaryServiceStatus": rec.get("flag_military_service_status"),
+                "Flags_WorkedAtFinancialInstitution": rec.get("flag_worked_at_financial_institution"),
+                "Flags_WorkedForEgyptianGovernment": rec.get("flag_worked_for_egyptian_government"),
+            })
+        
+        log_kv("APPLICANTS_GET", count=len(rows))
+        return jsonify({"rows": rows})
+    except Exception as e:
+        log_kv("APPLICANTS_GET_ERROR", error=str(e))
+        return jsonify({"rows": [], "error": str(e)}), 500
 
 
 @app.route("/api/weaviate/cv/<sha>")
@@ -764,6 +1197,41 @@ def api_weaviate_role_read(sha: str):
         return jsonify(obj)
     except Exception as e:
         log_kv("WEAVIATE_ROLE_READ_ERROR", error=str(e), sha=sha)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/weaviate/role_all/<sha>")
+def api_weaviate_role_all(sha: str):
+    """Return role document and sections by sha."""
+    try:
+        from utils.weaviate_store import WeaviateStore
+        ws = WeaviateStore()
+        if not ws.client:
+            return jsonify({"error": "Weaviate not configured"}), 503
+        doc = ws.read_role_from_db(sha)
+        if not doc:
+            return jsonify({"error": "Not found"}), 404
+        secs = ws.read_role_sections(sha)
+        return jsonify({"document": doc, "sections": secs})
+    except Exception as e:
+        log_kv("WEAVIATE_ROLE_ALL_ERROR", error=str(e), sha=sha)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/weaviate/role_by_path")
+def api_weaviate_role_by_path():
+    """Resolve sha for a file path and return role document + sections if present."""
+    try:
+        path = request.args.get("path")
+        if not path:
+            return jsonify({"error": "path query param required"}), 400
+        p = Path(path)
+        if not p.exists() or not p.is_file():
+            return jsonify({"error": "file not found"}), 404
+        sha = sha256_file(p)
+        return api_weaviate_role_all(sha)  # type: ignore
+    except Exception as e:
+        log_kv("WEAVIATE_ROLE_BY_PATH_ERROR", error=str(e))
         return jsonify({"error": str(e)}), 500
 
 

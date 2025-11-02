@@ -53,7 +53,24 @@
         {"name": "timestamp", "dataType": ["string"]},
         {"name": "filename", "dataType": ["string"]},
         {"name": "role_title", "dataType": ["string"]},
-        {"name": "full_text", "dataType": ["text"]}
+        {"name": "full_text", "dataType": ["text"]},
+        {"name": "job_title", "dataType": ["string"]},
+        {"name": "employer", "dataType": ["string"]},
+        {"name": "job_location", "dataType": ["string"]},
+        {"name": "language_requirement", "dataType": ["text"]},
+        {"name": "onsite_requirement_percentage", "dataType": ["int"]},
+        {"name": "onsite_requirement_mandatory", "dataType": ["string"]},
+        {"name": "serves_government", "dataType": ["string"]},
+        {"name": "serves_financial_institution", "dataType": ["string"]},
+        {"name": "min_years_experience", "dataType": ["int"]},
+        {"name": "must_have_skills", "dataType": ["text"]},
+        {"name": "should_have_skills", "dataType": ["text"]},
+        {"name": "nice_to_have_skills", "dataType": ["text"]},
+        {"name": "min_must_have_degree", "dataType": ["string"]},
+        {"name": "preferred_universities", "dataType": ["text"]},
+        {"name": "responsibilities", "dataType": ["text"]},
+        {"name": "technical_qualifications", "dataType": ["text"]},
+        {"name": "non_technical_qualifications", "dataType": ["text"]}
       ]
     },
     "RoleSection": {

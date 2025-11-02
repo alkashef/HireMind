@@ -1,6 +1,6 @@
 html, body { overflow-x: hidden; }
 body { font-family: Arial, sans-serif; margin: 24px; }
-:root { --list-footer-height: 40px; --left-col-width: 24%; --left-cell-width: 180px; }
+:root { --list-footer-height: 40px; --left-col-width: 33.33%; --left-cell-width: 180px; }
 .row { display: flex; gap: 8px; align-items: center; }
 .path-box { flex: 1; }
 label { display: block; margin-bottom: 6px; }
@@ -22,6 +22,13 @@ button { padding: 8px 12px; cursor: pointer; }
 .item.duplicate { background: #ffe6f0; }
 /* Mark items already extracted */
 .item.extracted { background: #eaffea; }
+/* Add a small checkmark icon for extracted items to improve scannability */
+.item.extracted::before {
+	content: "\2713"; /* checkmark */
+	color: #107c10;
+	font-weight: 700;
+	margin-right: 6px;
+}
 /* If an item is both duplicate and extracted, duplicate (pink) takes precedence */
 .item.duplicate.extracted, .item.extracted.duplicate { background: #ffe6f0; }
 
@@ -54,13 +61,12 @@ button { padding: 8px 12px; cursor: pointer; }
 body { padding-bottom: 48px; }
 
 /* Three-column layout with two rows: controls (row 1) and content (row 2) */
-.content-row { display: grid; grid-template-columns: var(--left-col-width) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr); grid-template-rows: auto 1fr; gap: 16px; align-items: stretch; margin-top: 8px; height: calc(100vh - 220px); overflow-x: hidden; }
+.content-row { display: grid; grid-template-columns: 1fr 1fr 1fr; grid-template-rows: auto 1fr; gap: 16px; align-items: stretch; margin-top: 8px; height: calc(100vh - 220px); overflow-x: hidden; }
 .left-controls { grid-column: 1; grid-row: 1; }
 .left-content { grid-column: 1; grid-row: 2; display: flex; flex-direction: column; min-height: 0; }
 .detail-pane { min-height: 0; overflow-y: auto; overflow-x: hidden; }
 #detailCol1 { grid-column: 2; grid-row: 2; }
 #detailCol2 { grid-column: 3; grid-row: 2; }
-#detailCol3 { grid-column: 4; grid-row: 2; }
 /* Roles detail column should align with applicants detail column */
 #roleDetailCol1 { grid-column: 2; grid-row: 2; }
 /* Container around detail tables */
