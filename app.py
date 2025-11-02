@@ -570,6 +570,117 @@ def api_extract():
         EXTRACT_PROGRESS.update({"active": False})
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/applicants/pipeline", methods=["POST"])
+def api_applicants_pipeline():
+    """Run the 7-step pipeline for a single selected CV and return artifacts.
+
+    Body: { "file": "C:/path/file.pdf" }
+    Returns: { sha, filename, fields, sections, embeddings_model, weaviate: { ok, id }, readback: { document, sections } }
+    """
+    payload = request.get_json(silent=True) or {}
+    fpath = payload.get("file")
+    if not fpath:
+        return jsonify({"error": "file is required"}), 400
+    p = Path(fpath)
+    if not p.exists() or not p.is_file():
+        return jsonify({"error": "file not found"}), 404
+
+    # Step 1: extract text and sha
+    log_kv("PIPELINE_STEP", step="1/6", action="extract_text")
+    text = ''
+    sha = sha256_file(p)
+    try:
+        from utils.extractors import pdf_to_text
+        text = pdf_to_text(p)
+    except Exception as e:
+        return jsonify({"error": f"pdf extract failed: {e}"}), 500
+
+    # Step 2: OpenAI extract fields
+    log_kv("PIPELINE_STEP", step="2/6", action="openai_extract_fields")
+    fields, err = openai_mgr.extract_full_name(p)
+    if err:
+        return jsonify({"error": f"openai extract failed: {err}"}), 500
+
+    # Step 3: slice sections
+    log_kv("PIPELINE_STEP", step="3/6", action="slice_sections")
+    from utils.slice import slice_sections
+    sections_map = slice_sections(text)
+
+    # Step 4: embeddings for sections
+    log_kv("PIPELINE_STEP", step="4/6", action="openai_embeddings")
+    titles = list(sections_map.keys())
+    texts = [sections_map[t] for t in titles]
+    vectors, err2 = openai_mgr.embed_texts(texts)
+    if err2:
+        return jsonify({"error": f"embeddings failed: {err2}"}), 500
+    emb_model = os.getenv("OPENAI_EMBEDDING_MODEL") or "text-embedding-3-small"
+
+    # Step 5 & 6: write to Weaviate using vectors and then read back
+    log_kv("PIPELINE_STEP", step="5/6", action="write_weaviate")
+    os.environ.setdefault("SKIP_WEAVIATE_VECTORIZER_CHECK", "1")
+    from utils.weaviate_store import WeaviateStore
+    ws = WeaviateStore()
+    ws.ensure_schema()
+
+    # Map fields into CVDocument attributes expected by write_cv_to_db
+    def fget(k: str) -> str:
+        v = (fields or {}).get(k)
+        if isinstance(v, list):
+            return ", ".join(str(x) for x in v)
+        return '' if v is None else str(v)
+    attrs = {
+        "timestamp": datetime.now().isoformat(),
+        "cv": p.name,
+        "personal_first_name": fget("first_name"),
+        "personal_last_name": fget("last_name"),
+        "personal_full_name": fget("full_name"),
+        "personal_email": fget("email"),
+        "personal_phone": fget("phone"),
+        "professional_misspelling_count": int(fields.get("misspelling_count")) if str(fields.get("misspelling_count", "")).isdigit() else None,
+        "professional_misspelled_words": fget("misspelled_words"),
+        "professional_visual_cleanliness": fget("visual_cleanliness"),
+        "professional_look": fget("professional_look"),
+        "professional_formatting_consistency": fget("formatting_consistency"),
+        "experience_years_since_graduation": int(fields.get("years_since_graduation")) if str(fields.get("years_since_graduation", "")).isdigit() else None,
+        "experience_total_years": int(fields.get("total_years_experience")) if str(fields.get("total_years_experience", "")).isdigit() else None,
+        "experience_employer_names": fget("employer_names"),
+        "stability_employers_count": int(fields.get("employers_count")) if str(fields.get("employers_count", "")).isdigit() else None,
+        "stability_avg_years_per_employer": fget("avg_years_per_employer"),
+        "stability_years_at_current_employer": fget("years_at_current_employer"),
+        "socio_address": fget("address"),
+        "socio_alma_mater": fget("alma_mater"),
+        "socio_high_school": fget("high_school"),
+        "socio_education_system": fget("education_system"),
+        "socio_second_foreign_language": fget("second_foreign_language"),
+        "flag_stem_degree": fget("flag_stem_degree"),
+        "flag_military_service_status": fget("military_service_status"),
+        "flag_worked_at_financial_institution": fget("worked_at_financial_institution"),
+        "flag_worked_for_egyptian_government": fget("worked_for_egyptian_government"),
+    }
+    doc_res = ws.write_cv_to_db(sha, p.name, text, attrs)
+
+    # Upsert sections with vectors
+    for idx, title in enumerate(titles):
+        sec_text = sections_map[title]
+        vec = vectors[idx] if vectors and idx < len(vectors) else None
+        ws.upsert_cv_section(sha, title, sec_text, vector=vec)
+
+    # Readback
+    log_kv("PIPELINE_STEP", step="6/6", action="readback_weaviate")
+    doc = ws.read_cv_from_db(sha)
+    secs = ws.read_cv_sections(sha)
+
+    log_kv("PIPELINE_COMPLETE", sha=sha, filename=p.name)
+    return jsonify({
+        "sha": sha,
+        "filename": p.name,
+        "fields": fields or {},
+        "sections": sections_map,
+        "embeddings_model": emb_model,
+        "weaviate": {"ok": True, "id": (doc_res or {}).get("id")},
+        "readback": {"document": doc, "sections": secs},
+    })
+
 
 @app.route("/api/extract/progress")
 def api_extract_progress():
@@ -591,11 +702,7 @@ def api_extract_progress():
 
 @app.route("/api/weaviate/cv/<sha>")
 def api_weaviate_cv_read(sha: str):
-    """Read-only endpoint to fetch CV data by sha from Weaviate (safe).
-
-    Returns 503 when Weaviate is not configured, 404 when object missing, or
-    200 with JSON body when found.
-    """
+    """Read-only endpoint to fetch CV document by sha from Weaviate (safe)."""
     try:
         from utils.weaviate_store import WeaviateStore
         ws = WeaviateStore()
@@ -607,6 +714,39 @@ def api_weaviate_cv_read(sha: str):
         return jsonify(obj)
     except Exception as e:
         log_kv("WEAVIATE_CV_READ_ERROR", error=str(e), sha=sha)
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/weaviate/cv_all/<sha>")
+def api_weaviate_cv_all(sha: str):
+    """Return document and sections for a CV by sha."""
+    try:
+        from utils.weaviate_store import WeaviateStore
+        ws = WeaviateStore()
+        if not ws.client:
+            return jsonify({"error": "Weaviate not configured"}), 503
+        doc = ws.read_cv_from_db(sha)
+        if not doc:
+            return jsonify({"error": "Not found"}), 404
+        secs = ws.read_cv_sections(sha)
+        return jsonify({"document": doc, "sections": secs})
+    except Exception as e:
+        log_kv("WEAVIATE_CV_ALL_ERROR", error=str(e), sha=sha)
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/weaviate/cv_by_path")
+def api_weaviate_cv_by_path():
+    """Resolve sha for a file path and return document + sections if present."""
+    try:
+        path = request.args.get("path")
+        if not path:
+            return jsonify({"error": "path query param required"}), 400
+        p = Path(path)
+        if not p.exists() or not p.is_file():
+            return jsonify({"error": "file not found"}), 404
+        sha = sha256_file(p)
+        return api_weaviate_cv_all(sha)  # type: ignore
+    except Exception as e:
+        log_kv("WEAVIATE_CV_BY_PATH_ERROR", error=str(e))
         return jsonify({"error": str(e)}), 500
 
 
@@ -624,6 +764,63 @@ def api_weaviate_role_read(sha: str):
         return jsonify(obj)
     except Exception as e:
         log_kv("WEAVIATE_ROLE_READ_ERROR", error=str(e), sha=sha)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/weaviate/flush", methods=["POST"])
+def api_weaviate_flush():
+    """Delete all CVDocument and CVSection objects from Weaviate."""
+    try:
+        from utils.weaviate_store import WeaviateStore
+        ws = WeaviateStore()
+        if not ws.client:
+            return jsonify({"error": "Weaviate not configured"}), 503
+        
+        # Delete all objects by querying and deleting in batches
+        deleted_docs = 0
+        deleted_secs = 0
+        
+        # Delete all CVDocument objects
+        while True:
+            res = ws._query_do("CVDocument", ["sha"], None, additional=["id"])
+            items = res.get("data", {}).get("Get", {}).get("CVDocument", [])
+            if not items:
+                break
+            for it in items:
+                obj_id = (it.get("_additional") or {}).get("id") or it.get("id")
+                if obj_id:
+                    try:
+                        # Use HTTP DELETE since we don't have a delete adapter yet
+                        import requests
+                        url = ws.url.rstrip("/") + f"/v1/objects/{obj_id}"
+                        resp = requests.delete(url, timeout=10)
+                        if resp.status_code in (200, 204):
+                            deleted_docs += 1
+                    except Exception:
+                        pass
+        
+        # Delete all CVSection objects
+        while True:
+            res = ws._query_do("CVSection", ["parent_sha"], None, additional=["id"])
+            items = res.get("data", {}).get("Get", {}).get("CVSection", [])
+            if not items:
+                break
+            for it in items:
+                obj_id = (it.get("_additional") or {}).get("id") or it.get("id")
+                if obj_id:
+                    try:
+                        import requests
+                        url = ws.url.rstrip("/") + f"/v1/objects/{obj_id}"
+                        resp = requests.delete(url, timeout=10)
+                        if resp.status_code in (200, 204):
+                            deleted_secs += 1
+                    except Exception:
+                        pass
+        
+        log_kv("WEAVIATE_FLUSH", docs=deleted_docs, sections=deleted_secs)
+        return jsonify({"ok": True, "deleted_documents": deleted_docs, "deleted_sections": deleted_secs})
+    except Exception as e:
+        log_kv("WEAVIATE_FLUSH_ERROR", error=str(e))
         return jsonify({"error": str(e)}), 500
 
 

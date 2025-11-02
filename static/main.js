@@ -68,21 +68,14 @@
   function renderApplicantDetailsForPath(path) {
     const col1 = document.getElementById('tablesCol1');
     const col2 = document.getElementById('tablesCol2');
-    if (!col1 || !col2) return;
+    const col3 = document.getElementById('weaviateCol');
+    if (!col1 || !col2 || !col3) return;
     // Clear first
     col1.innerHTML = '';
     col2.innerHTML = '';
+    col3.innerHTML = '';
     if (!path) return;
     const basename = (path || '').toString().split(/[\\/]/).pop();
-    // Find matching row by cv (filename) or id
-    const row = (applicantsTableRows || []).find(r => {
-      const cv = (r.cv || '').toString();
-      return cv === basename || cv.endsWith(basename);
-    });
-    if (!row) {
-      col1.innerHTML = `<div class="muted">No extracted data for: ${basename}</div>`;
-      return;
-    }
 
     function mkTable(title, pairs) {
       const th = `<div class="table-title">${title}</div>`;
@@ -90,47 +83,119 @@
       return `${th}<div class="table-wrap"><table class="data-table"><tbody>${rows}</tbody></table></div>`;
     }
 
-    const personal = [
-      ['Full name', row.full_name || row.fullname || ''],
-      ['First name', row.first_name || ''],
-      ['Last name', row.last_name || ''],
-      ['Email', row.email || ''],
-      ['Phone', row.phone || ''],
-    ];
-    const professionalism = [
-      ['Misspelling count', row.misspelling_count || ''],
-      ['Misspelled words', row.misspelled_words || ''],
-      ['Visual cleanliness', row.visual_cleanliness || ''],
-      ['Professional look', row.professional_look || ''],
-      ['Formatting consistency', row.formatting_consistency || ''],
-    ];
-    const experience = [
-      ['Years since graduation', row.years_since_graduation || ''],
-      ['Total years experience', row.total_years_experience || ''],
-      ['Employer names', row.employer_names || ''],
-    ];
-    const stability = [
-      ['Employers count', row.employers_count || ''],
-      ['Avg years per employer', row.avg_years_per_employer || ''],
-      ['Years at current employer', row.years_at_current_employer || ''],
-    ];
-    const socioeconomic = [
-      ['Address', row.address || ''],
-      ['Alma mater', row.alma_mater || ''],
-      ['High school', row.high_school || ''],
-      ['Education system', row.education_system || ''],
-      ['Second foreign language', row.second_foreign_language || ''],
-    ];
-    const flags = [
-      ['STEM degree', row.flag_stem_degree || ''],
-      ['Military service status', row.military_service_status || ''],
-      ['Worked at financial institution', row.worked_at_financial_institution || ''],
-      ['Worked for Egyptian government', row.worked_for_egyptian_government || ''],
-    ];
+    // If we have recent pipeline fields for this path, prefer them
+    const useOverride = window.lastExtractFieldsPath === path && window.lastExtractFieldsRow;
+    let row = null;
+    if (useOverride) {
+      row = window.lastExtractFieldsRow;
+    } else {
+      // Find matching row by cv (filename) or id
+      row = (applicantsTableRows || []).find(r => {
+        const cv = (r.cv || '').toString();
+        return cv === basename || cv.endsWith(basename);
+      });
+    }
 
-    // Put some groups in col1 and others in col2 for layout parity
-    col1.innerHTML = mkTable('Personal Information', personal) + mkTable('Professionalism', professionalism);
-    col2.innerHTML = mkTable('Experience', experience) + mkTable('Stability', stability) + mkTable('Socioeconomic Standard', socioeconomic) + mkTable('Flags', flags);
+    if (!row) {
+      col1.innerHTML = `<div class="muted">No extracted data for: ${basename}</div>`;
+    } else {
+      const personal = [
+        ['Full name', row.full_name || row.fullname || ''],
+        ['First name', row.first_name || ''],
+        ['Last name', row.last_name || ''],
+        ['Email', row.email || ''],
+        ['Phone', row.phone || ''],
+      ];
+      const professionalism = [
+        ['Misspelling count', row.misspelling_count || ''],
+        ['Misspelled words', row.misspelled_words || ''],
+        ['Visual cleanliness', row.visual_cleanliness || ''],
+        ['Professional look', row.professional_look || ''],
+        ['Formatting consistency', row.formatting_consistency || ''],
+      ];
+      const experience = [
+        ['Years since graduation', row.years_since_graduation || ''],
+        ['Total years experience', row.total_years_experience || ''],
+        ['Employer names', row.employer_names || ''],
+      ];
+      const stability = [
+        ['Employers count', row.employers_count || ''],
+        ['Avg years per employer', row.avg_years_per_employer || ''],
+        ['Years at current employer', row.years_at_current_employer || ''],
+      ];
+      const socioeconomic = [
+        ['Address', row.address || ''],
+        ['Alma mater', row.alma_mater || ''],
+        ['High school', row.high_school || ''],
+        ['Education system', row.education_system || ''],
+        ['Second foreign language', row.second_foreign_language || ''],
+      ];
+      const flags = [
+        ['STEM degree', row.flag_stem_degree || ''],
+        ['Military service status', row.military_service_status || ''],
+        ['Worked at financial institution', row.worked_at_financial_institution || ''],
+        ['Worked for Egyptian government', row.worked_for_egyptian_government || ''],
+      ];
+
+      // Put some groups in col1 and others in col2 for layout parity
+      col1.innerHTML = mkTable('Personal Information', personal) + mkTable('Professionalism', professionalism) + mkTable('Flags', flags);
+      col2.innerHTML = mkTable('Experience', experience) + mkTable('Stability', stability) + mkTable('Socioeconomic Standard', socioeconomic);
+    }
+
+    // Always attempt to populate Weaviate column for the selected path
+    renderWeaviateForPath(path, col3, mkTable);
+  }
+
+  function fieldsToRow(fields) {
+    const f = fields || {};
+    const get = (k) => (f[k] == null ? '' : f[k]);
+    return {
+      full_name: get('full_name'),
+      first_name: get('first_name'),
+      last_name: get('last_name'),
+      email: get('email'),
+      phone: get('phone'),
+      misspelling_count: get('misspelling_count'),
+      misspelled_words: get('misspelled_words'),
+      visual_cleanliness: get('visual_cleanliness'),
+      professional_look: get('professional_look'),
+      formatting_consistency: get('formatting_consistency'),
+      years_since_graduation: get('years_since_graduation'),
+      total_years_experience: get('total_years_experience'),
+      employer_names: get('employer_names'),
+      employers_count: get('employers_count'),
+      avg_years_per_employer: get('avg_years_per_employer'),
+      years_at_current_employer: get('years_at_current_employer'),
+      address: get('address'),
+      alma_mater: get('alma_mater'),
+      high_school: get('high_school'),
+      education_system: get('education_system'),
+      second_foreign_language: get('second_foreign_language'),
+      flag_stem_degree: get('flag_stem_degree'),
+      military_service_status: get('military_service_status'),
+      worked_at_financial_institution: get('worked_at_financial_institution'),
+      worked_for_egyptian_government: get('worked_for_egyptian_government'),
+    };
+  }
+
+  async function renderWeaviateForPath(path, col3, mkTable) {
+    try {
+      const url = '/api/weaviate/cv_by_path?path=' + encodeURIComponent(path);
+      const j = await fetchJSON(url);
+      const doc = j.document || {};
+      const sections = Array.isArray(j.sections) ? j.sections : [];
+      const props = doc.attributes || {};
+      const docPairs = [
+        ['SHA', doc.sha || ''],
+        ['Filename', doc.filename || ''],
+        ['Full text chars', (doc.full_text || '').length],
+      ];
+      const attrPairs = Object.entries(props).map(([k,v]) => [k, (Array.isArray(v)||typeof v==='object') ? JSON.stringify(v) : (v||'')]);
+      const secPairs = sections.map((s,i) => [s.section_type || `Section ${i+1}`, (s.section_text || '').slice(0, 200) + ((s.section_text||'').length>200?'...':'')]);
+      col3.innerHTML = mkTable('Weaviate Document', docPairs) + mkTable('Weaviate Attributes', attrPairs) + mkTable('Weaviate Sections', secPairs);
+    } catch (e) {
+      col3.innerHTML = `<div class="muted">Weaviate read error: ${e.message || e}</div>`;
+    }
   }
 
   async function highlightApplicantsDuplicates(files) {
@@ -286,17 +351,44 @@
       }
       try {
         if (window.setUIBusy) window.setUIBusy(true);
-        await startApplicantsExtractPolling();
-        setStatus('Extracting...');
-        const r = await fetch('/api/extract', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ files: picked }),
-        });
-        const j = await r.json();
-        if (!r.ok) throw new Error(j.error || 'Extraction failed');
-        await refreshApplicantsExtracted();
-        setStatus(`Extraction completed; saved ${j.saved}.`);
+        if (picked.length === 1) {
+          // Run the 7-step pipeline for a single selected CV and update UI with step progress
+          const steps = ['1/6: Extracting text', '2/6: OpenAI fields', '3/6: Slicing sections', '4/6: OpenAI embeddings', '5/6: Writing to Weaviate', '6/6: Reading back'];
+          let currentStep = 0;
+          const pollInterval = setInterval(() => {
+            if (currentStep < steps.length) {
+              setStatus(steps[currentStep]);
+              currentStep++;
+            }
+          }, 1500);
+          
+          const r = await fetch('/api/applicants/pipeline', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ file: picked[0] }),
+          });
+          clearInterval(pollInterval);
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || 'Pipeline failed');
+          // Cache fields for this path and re-render details
+          window.lastExtractFieldsPath = picked[0];
+          window.lastExtractFieldsRow = fieldsToRow(j.fields || {});
+          renderApplicantDetailsForPath(picked[0]);
+          setStatus('Pipeline completed. Displaying extracted fields and Weaviate readback.');
+        } else {
+          // Fallback to CSV extract for multiple files
+          await startApplicantsExtractPolling();
+          setStatus('Extracting (CSV-only) ...');
+          const r = await fetch('/api/extract', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ files: picked }),
+          });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || 'Extraction failed');
+          await refreshApplicantsExtracted();
+          setStatus(`Extraction completed; saved ${j.saved}.`);
+        }
       } catch (e) {
         console.error(e);
         setStatus(`Error: ${e.message || e}`);

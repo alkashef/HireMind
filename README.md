@@ -164,6 +164,12 @@ python tests\test_e2e_extract_pdf.py
 - The script will also write a separate readback report to:
     - `TEST_E2E_JSON_READ` (default `tests/e2e_read.json`) with fields: `sha`, `document`, `sections`, and `checks` (doc_ok, sections_count_ok, counts). The `document` and each item in `sections` include `_additional.vector` as `vector` when available, so you can inspect embeddings.
 
+Applicants tab enhancements
+- Extract button (single selection) now runs the full pipeline (PDF ➜ fields ➜ sections ➜ embeddings ➜ Weaviate) and shows:
+  - Extracted fields in the two details columns
+  - Weaviate document + sections in a new right-hand column
+- Multi-selection falls back to CSV-only extract as before.
+
 Required environment:
 - `TEST_CV_PATH` — absolute path to the input PDF
 - `OPENAI_API_KEY` — for steps 2 and 4
