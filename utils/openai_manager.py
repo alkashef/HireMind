@@ -296,6 +296,99 @@ class OpenAIManager:
         except Exception as e:
             return None, str(e)
 
+    def extract_role_fields_from_text(self, text_content: str) -> Tuple[Dict[str, Any] | None, str | None]:
+        """Extract structured role fields from a provided text string using OpenAI.
+
+        This mirrors ``extract_role_fields`` but operates on raw text instead of reading a file.
+
+        Returns (data, None) on success or (None, error) on failure.
+        """
+        try:
+            api_key = self.config.openai_api_key
+            if not api_key:
+                return None, "OPENAI_API_KEY not set"
+
+            client = OpenAI()
+            system_text, user_text = self._load_prompts_role()
+
+            # SDK path
+            if hasattr(client, "responses"):
+                response = client.responses.create(
+                    model=self.config.openai_model,
+                    input=[
+                        {"role": "system", "content": [{"type": "input_text", "text": system_text}]},
+                        {"role": "user", "content": [
+                            {"type": "input_text", "text": user_text},
+                            {"type": "input_text", "text": text_content},
+                        ]},
+                    ],
+                    text={"format": {"type": "json_object"}},
+                )
+                content = getattr(response, "output_text", None)
+                if not content:
+                    try:
+                        content = response.output[0].content[0].text
+                    except Exception:
+                        content = ""
+                data = json.loads(content) if content else {}
+                self.logger.log_kv("OPENAI_TEXT_MODE_ROLE", size=len(text_content))
+                return data or {}, None
+
+            # HTTP fallback
+            try:
+                import requests
+            except Exception:
+                ver = getattr(openai_pkg, "__version__", "unknown")
+                return None, (
+                    f"OpenAI SDK {ver} lacks Responses API and 'requests' is unavailable for HTTP fallback. "
+                    "Add 'requests' to requirements.txt and reinstall."
+                )
+
+            base_url = self.config.openai_base_url
+            headers_json = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+            body = {
+                "model": self.config.openai_model,
+                "input": [
+                    {"role": "system", "content": [{"type": "input_text", "text": system_text}]},
+                    {"role": "user", "content": [
+                        {"type": "input_text", "text": user_text},
+                        {"type": "input_text", "text": text_content},
+                    ]},
+                ],
+                "text": {"format": {"type": "json_object"}},
+            }
+            try:
+                resp = requests.post(
+                    f"{base_url.rstrip('/')}/responses",
+                    headers=headers_json,
+                    data=json.dumps(body),
+                    timeout=self.config.request_timeout_seconds,
+                )
+            except Exception as e:
+                return None, f"HTTP fallback error: {e}"
+            if resp.status_code >= 400:
+                return None, f"HTTP fallback error: {resp.status_code} {resp.text}"
+
+            try:
+                payload = resp.json()
+            except Exception:
+                payload = {}
+
+            content = payload.get("output_text")
+            if not content:
+                try:
+                    content = payload["output"][0]["content"][0]["text"]
+                except Exception:
+                    content = ""
+            data = json.loads(content) if content else {}
+            self.logger.log_kv("OPENAI_TEXT_MODE_ROLE", size=len(text_content))
+            return data or {}, None
+        except Exception as e:
+            return None, str(e)
+
     # ---------------------------------------------------------------------
     # Embeddings
     def embed_texts(self, texts: List[str], model: Optional[str] = None) -> Tuple[List[List[float]] | None, str | None]:

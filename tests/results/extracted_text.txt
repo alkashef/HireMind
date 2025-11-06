@@ -1,0 +1,126 @@
+Ahmad Alkashef 
+Director of AI, Data, and Analytics
+ 
+alkashef@gmail.com | +20-100-506-2208 | Cairo | http://linkedin.com/in/alkashef | http://github.com/alkashef
+ 
+Next Role  
+Targeting a strategic leadership or AI presales role in a product-driven software company, where I can drive AI 
+and data strategy, grow high-performing teams, and deliver innovative, customer-centric solutions. 
+Summary 
+Senior leader with 24+ years of experience in AI, data, and software across semiconductors, energy, 
+government, and tech. I’ve built and led high-performing engineering teams in AI, data integration, BI, testing, 
+and software development — while consistently leading AI presales efforts across strategic accounts since 
+joining Teradata. Recognized for a strategic mindset, structured execution, and ability to align delivery with 
+business value. Led Egypt’s national digital transformation analytics program, interfacing directly with vice-
+minister-level stakeholders. Based in Cairo, with long-term assignments across Munich, EMEA, and the US. 
+Industry Experience  
+• 
+Semiconductors (Mentor Graphics, Infineon) 
+• 
+Oil & Gas (Schlumberger) 
+• 
+Government (ACA, MCIT through Teradata) 
+• 
+Telecom (Etisalat Egypt, Orange, and Asiacell through Teradata) 
+• 
+Software & Product (Teradata, Microsoft) 
+Skills 
+Technical & Strategic Expertise 
+AI, Data & Analytics Strategy • Software & AI Solution Architecture • Business Transformation 
+Leadership & Management 
+Executive & Organizational Leadership • Team Growth & Development • Management & Influence • Presales & 
+Customer Engagement • Program & Project Management • Negotiation & Communication
+
+Professional Experience 
+Teradata | Cairo 
+Various leadership roles                                                                                                         2017 – Present 
+ 
+Head of Data and Analytics (Mar 2023 – Present) 
+o Managing the technical arm of Egypt's consulting (45 consultants): AI, data integration/engineering, 
+business intelligence, data modeling, software, and testing teams. 
+o Supported presales across MEA’s major accounts, owning technical leadership for AI opportunities. 
+o Delivered AI talks and solution demos at Teradata conferences since 2019, presenting to customers, 
+prospects, and partners as part of ongoing presales and thought leadership efforts. 
+Head of Egyptian Government Program (Jan 2023 – Dec 2023) 
+o Stepped in as the interim Program Director for the Egyptian government program. 
+o Adjusted program scope and approach to realign with the strategic customer needs. 
+o Turned around a $6M Data and Analytics program. 
+o Defined changes and additional scope worth $3m. 
+o Aligned organization around change strategy and commercial impacts including EMEA and MEA leadership. 
+o Successfully led negotiations with vice-minister stakeholders, securing $1M+ in additional services. 
+o Headed Egypt's program management team, between Jan and Oct 2023. 
+Analytics Director, MEA (Jul 2019 – Jan 2023) 
+o Scaled MEA AI, data, and software teams, delivering cross-industry AI solutions. 
+o Headed the analytics design authority of Egypt’s digital transformation project. 
+o Designed analytics training programs for local educational institutions, the Egyptian government, and 
+industry recommendations for international academic data science programs. 
+o Selected for Teradata's management development program. 
+o Owned AI presales for Teradata’s flagship government engagement in Egypt, providing thought and 
+technical leadership to align multi-million dollar AI initiatives with client priorities. 
+Principal Data Scientist (Oct 2017 – Jun 2019) 
+o Managed TD Egypt's data science team (12 data scientists). 
+o Led the implementation of data science use cases for Telcos and the Egyptian government. 
+Senior Data Scientist (Feb 2017 - Oct 2017) 
+o Developed data science use cases for Telcos and the Egyptian government. 
+Research Software Development Engineer 
+Jun 2015 - Sep 2016 
+Microsoft | Cairo 
+o Built Arabic language and acoustic models for Skype translation. 
+o Adapted acoustic DNN model for meeting scenarios. 
+o Developed the Android SDK for Microsoft's speaker identification APIs. 
+Scientific Software Engineer 
+Apr 2012 - Dec 2014 
+Schlumberger | Cairo 
+o Developed and managed a C# application to build near-surface earth models from seismic data. 
+o Published: Ahmad Al-Kashef and Amr Misbah. Improving Synchronization between TFS Server and Client 
+for Remote Development of Petrel Plugins. Schlumberger Best Practice # 6575846, December 2014.
+
+Sr Integrated Circuits Design Consultant 
+Mar 2011 - Mar 2012 
+Infineon | Munich 
+o Modelled and verified large semiconductor memory arrays on the mixed-signal level. 
+o Developed Virtuoso schematics and Verilog models to test Virtuoso’s Verilog netlister. 
+o Designed and led the development of SystemVerilog assertion models for semiconductor memory IPs. 
+Behavioral Modeling Automation Expert 
+Feb 2002 - Mar 2011 
+Mentor Graphics (Siemens) | Cairo 
+o Developed and tested deterministic and statistical behavioral models of integrated circuits. 
+o Designed and conducted simulation experiments for integrated circuits verification. 
+o Consulted customers on-site and off-site on design verification. 
+o Developed, and automated tests and quality plans for mixed-signal simulators. 
+o Designed and automated regression processes. 
+o Published: Ahmad Al-Kashef et al. Behavioral Modeling and Verification of a 2.5 Gbps SerDes for PCI Express 
+Using ADVance MS™ and CommLib SerDes. Mentor Graphics, Application Note # 10201. 
+o Received Mentor's product quality improvement award. 
+ 
+Education 
+M.Sc. in Artificial Intelligence 
+2008 
+Faculty of Engineering, Ain Shams University 
+o Thesis: "A Case-Based Reasoning Approach for the Knowledge Representation of VHDL-AMS Behavioral 
+Models" 
+o Publication: Ahmad Al-Kashef, Manal M. Zaky, Mohamed Dessouky & Hassan El-Ghitany. A Case-Based 
+Reasoning Approach for the Automatic Generation of VHDL-AMS Models. In the Proceedings of the 2008 
+IEEE International Behavioral Modeling and Simulation Workshop, pages 100-105, Sept. 2008. 
+B.Sc. in Electronics and Communications 
+2001 
+Faculty of Engineering, Ain Shams University 
+ 
+Executive Education 
+MIT Sloan School of Management — Executive Certificate in Management and Leadership 
+(Expected 2026) 
+o Mastering Negotiation and Influence, May 2025 
+o Understanding and Solving Complex Business Problems, Dec 2024 
+o Unlocking Your Leadership Signature, Jan 2026 
+o One additional course (TBD).
+
+Outside Work 
+o Practicing visual artist 
+o Former member of Egypt’s Youth Olympic Swimming team 
+o Several national medals in swimming and water polo 
+o Contributor to the Academic Advisory initiative — https://github.com/brohrer/academic_advisory 
+o Technical Advisory Board Member 
+• 
+Egypt University of Informatics — Faculty of Computing and Information Sciences 
+• 
+American University in Cairo (AUC) — Department of Computer Science and Engineering

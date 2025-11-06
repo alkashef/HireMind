@@ -309,7 +309,7 @@
 
   async function startApplicantsExtractPolling() {
     const startedAt = Date.now();
-    const fmtSec = (ms) => `(${Math.floor(ms/1000)} sec) ...`;
+    const fmtSec = (ms) => `${Math.floor(ms/1000)}s`;
     if (applicantsExtractPollTimer) clearInterval(applicantsExtractPollTimer);
     applicantsExtractPollTimer = setInterval(async () => {
       try {
@@ -319,7 +319,7 @@
         const total = Number(j.total || 0);
         const done = Number(j.done || 0);
         const elapsed = fmtSec(Date.now() - startedAt);
-        if (window.setStatus) window.setStatus(`extracted ${done} out of ${total} files ${elapsed}`);
+        if (window.setStatus) window.setStatus(`Extracting information from batch (applicants): processed ${done}/${total} files (elapsed ${elapsed})`);
         if (!j.active) { clearInterval(applicantsExtractPollTimer); applicantsExtractPollTimer = null; }
       } catch (_) { /* ignore */ }
     }, 500);
@@ -369,8 +369,18 @@
       try {
         if (window.setUIBusy) window.setUIBusy(true);
   if (picked.length === 1) {
-          // Run the 7-step pipeline for a single selected CV and update UI with step progress
-          const steps = ['1/6: Extracting text', '2/6: OpenAI fields', '3/6: Slicing sections', '4/6: OpenAI embeddings', '5/6: Writing to Weaviate', '6/6: Reading back'];
+          // Single-file pipeline progress (6 detailed steps) with filename context
+          const filePath = picked[0];
+          const basename = (filePath || '').toString().split(/[\\/]/).pop();
+          const isDocx = /\.docx$/i.test(basename);
+          const steps = [
+            `Extracting information from ${basename}: STEP 1/6: Read file & compute SHA`,
+            `Extracting information from ${basename}: STEP 2/6: Parse ${isDocx ? 'DOCX' : 'PDF'} text`,
+            `Extracting information from ${basename}: STEP 3/6: Extract fields with OpenAI`,
+            `Extracting information from ${basename}: STEP 4/6: Slice text into sections`,
+            `Extracting information from ${basename}: STEP 5/6: Compute embeddings (doc + sections)`,
+            `Extracting information from ${basename}: STEP 6/6: Save to Weaviate and verify readback`,
+          ];
           let currentStep = 0;
           const pollInterval = setInterval(() => {
             if (currentStep < steps.length) {
@@ -378,28 +388,28 @@
               currentStep++;
             }
           }, 1500);
-          
+
           const r = await fetch('/api/applicants/pipeline', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ file: picked[0] }),
+            body: JSON.stringify({ file: filePath }),
           });
           clearInterval(pollInterval);
           const j = await r.json();
           if (!r.ok) throw new Error(j.error || 'Pipeline failed');
           // Cache fields for this path and re-render details
-          window.lastExtractFieldsPath = picked[0];
+          window.lastExtractFieldsPath = filePath;
           window.lastExtractFieldsRow = fieldsToRow(j.fields || {});
-          renderApplicantDetailsForPath(picked[0]);
+          renderApplicantDetailsForPath(filePath);
           // Refresh the list/markers after single-file extraction
           if (typeof refreshApplicantsExtracted === 'function') {
             await refreshApplicantsExtracted();
           }
-          setStatus('Pipeline completed. Displaying extracted fields.');
+          setStatus(`Extracting information from ${basename}: completed successfully`);
         } else {
           // Batch pipeline for multiple files
           await startApplicantsExtractPolling();
-          setStatus('Extracting batch ...');
+          setStatus('Extracting information from batch (applicants): starting...');
           const r = await fetch('/api/applicants/pipeline/batch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -408,7 +418,7 @@
           const j = await r.json();
           if (!r.ok) throw new Error(j.error || 'Batch extraction failed');
           await refreshApplicantsExtracted();
-          setStatus(`Batch completed: ${j.processed} processed, ${j.errors.length} errors.`);
+          setStatus(`Extracting information from batch (applicants): completed — processed ${j.processed}, errors ${j.errors.length}.`);
         }
       } catch (e) {
         console.error(e);

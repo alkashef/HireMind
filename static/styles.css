@@ -9,7 +9,7 @@ label { display: block; margin-bottom: 6px; }
 input[readonly] { width: 100%; padding: 8px; }
 button { padding: 8px 12px; cursor: pointer; }
 .list { margin-top: 16px; border: 1px solid #ddd; border-radius: 6px; padding: 8px; /* height set via flex */ overflow-y: auto; overflow-x: hidden; background: #fff; }
-.item { padding: 6px 4px; border-bottom: 1px solid #f1f1f1; font-size: 14px; }
+.item { padding: 6px 44px 6px 4px; border-bottom: 1px solid #f1f1f1; font-size: 14px; position: relative; }
 .item:last-child { border-bottom: none; }
 .muted { color: #666; }
 
@@ -22,31 +22,32 @@ button { padding: 8px 12px; cursor: pointer; }
 /* no special selection styling for extracted */
 /* .item.extracted.selected {} */
 .item.duplicate { background: #ffe6f0; }
-/* Add a small checkmark icon for extracted items to improve scannability */
-.item.extracted::before {
+/* Right-aligned status icons: database (rightmost), puzzle (to its left) */
+.item.extracted::after {
 	content: "";
-	display: inline-block;
+	position: absolute;
+	right: 8px;
+	top: 50%;
+	transform: translateY(-50%);
 	width: 14px;
 	height: 14px;
-	margin-right: 6px;
 	background-image: url('/img/database.png');
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
-	vertical-align: text-bottom;
 }
-/* Use a puzzle icon to indicate matched items */
 .item.matched::before {
 	content: "";
-	display: inline-block;
+	position: absolute;
+	right: 28px; /* 14px icon + 6-8px gap before the database icon */
+	top: 50%;
+	transform: translateY(-50%);
 	width: 14px;
 	height: 14px;
-	margin-right: 6px;
 	background-image: url('/img/puzzle.png');
 	background-size: contain;
 	background-repeat: no-repeat;
 	background-position: center;
-	vertical-align: text-bottom;
 }
 /* If an item is both duplicate and extracted, duplicate (pink) takes precedence */
 .item.duplicate.extracted, .item.extracted.duplicate { background: #ffe6f0; }

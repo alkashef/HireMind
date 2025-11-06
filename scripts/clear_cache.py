@@ -4,7 +4,7 @@ Script to clear project cache and ephemeral artifacts.
 
 Behavior:
 - Removes Python bytecode files, pytest cache, temporary files, and other cache types.
-- Purges ALL contents under tests/data (but keeps the tests/data folder itself).
+- Purges ALL contents under tests/results (but keeps the tests/results folder itself).
 - Never deletes anything under tests/ref (reserved for reference fixtures).
 - Skips top-level models/ and data/ to avoid deleting model artifacts or user data.
 """
@@ -42,12 +42,12 @@ def find_cache_files(base_path: Path) -> List[Path]:
     to_delete: List[Path] = []
 
     tests_dir = base_path / "tests"
-    tests_data_dir = tests_dir / "data"
+    tests_results_dir = tests_dir / "results"
     tests_ref_dir = tests_dir / "ref"
 
-    # 1) Purge tests/data contents (files and subdirectories), but keep the folder itself
-    if tests_data_dir.exists() and tests_data_dir.is_dir():
-        for child in tests_data_dir.iterdir():
+    # 1) Purge tests/results contents (files and subdirectories), but keep the folder itself
+    if tests_results_dir.exists() and tests_results_dir.is_dir():
+        for child in tests_results_dir.iterdir():
             # Do not touch tests/ref even if someone placed a link
             try:
                 if tests_ref_dir.exists() and tests_ref_dir in child.parents:
@@ -65,8 +65,12 @@ def find_cache_files(base_path: Path) -> List[Path]:
             pass
         # Always skip anything inside `models/` or `data/` directories to avoid accidental deletions
         # This ensures the script will not remove model artifacts or user data.
-        # NOTE: We intentionally handle tests/data above; this guard is for top-level dirs.
+    # NOTE: We intentionally handle tests/results above; this guard is for top-level dirs.
         if any(p in ("models", "data") for p in path.parts):
+            continue
+        # Additionally, protect the new Weaviate persistence path under store/weaviate_data
+        # from any cleanup.
+        if ("store" in path.parts) and ("weaviate_data" in path.parts):
             continue
             
         # Check if path matches any cache pattern

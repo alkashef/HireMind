@@ -9,4 +9,4 @@ if %ERRORLEVEL% neq 0 (
   exit /b %ERRORLEVEL%
 )
 
-echo Done. You can remove persisted data by deleting the data\weaviate_data folder if desired.
+echo Done. You can remove persisted data by deleting the store\weaviate_data folder if desired.

@@ -24,5 +24,5 @@ services:
       # Use a separate gRPC port by default to avoid accidental conflicts with HTTP
       - WEAVIATE_GRPC_PORT=${WEAVIATE_GRPC_PORT:-8081}
     volumes:
-      - ./data/weaviate_data:/var/lib/weaviate
+      - ./store/weaviate_data:/var/lib/weaviate
     restart: unless-stopped

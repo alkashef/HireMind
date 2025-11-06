@@ -303,9 +303,9 @@ def api_roles_extract():
     try:
         if request.method == "GET":
             os.environ.setdefault("SKIP_WEAVIATE_VECTORIZER_CHECK", "1")
-            from utils.weaviate_store import WeaviateStore
+            from store.weaviate_store import WeaviateStore
             ws = WeaviateStore()
-            recs = ws.list_all_roles()
+            recs = ws.roles.list()
             # roles.js expects rows with at least 'filename' for marking extracted
             rows = [{"filename": r.get("filename"), "sha": r.get("sha"), "role_title": r.get("role_title"), "timestamp": r.get("timestamp")} for r in recs]
             log_kv("ROLES_EXTRACT_GET", rows=len(rows))
@@ -325,7 +325,7 @@ def api_roles_extract():
             "start": datetime.now().timestamp(),
         })
         os.environ.setdefault("SKIP_WEAVIATE_VECTORIZER_CHECK", "1")
-        from utils.weaviate_store import WeaviateStore
+        from store.weaviate_store import WeaviateStore
         ws = WeaviateStore()
         ws.ensure_schema()
 
@@ -338,7 +338,7 @@ def api_roles_extract():
                     continue
                 rid = sha256_file(p)
                 # Skip if exists
-                existing = ws.read_role_from_db(rid)
+                existing = ws.roles.read(rid)
                 if existing:
                     log_kv("ROLES_EXTRACT_SKIP_ALREADY_DONE", id=rid, file=p.name)
                 else:
@@ -356,7 +356,7 @@ def api_roles_extract():
                     except Exception:
                         text = p.read_text(encoding="utf-8", errors="ignore")
                     attrs = {"timestamp": stamp, "role_title": p.stem}
-                    ws.write_role_to_db(rid, p.name, text, attrs)
+                    ws.roles.write(rid, p.name, text, attrs)
                     saved += 1
                     log_kv("ROLES_EXTRACT_ROW_NEW", id=rid, file=p.name)
             except Exception as e:
@@ -453,11 +453,11 @@ def api_roles_pipeline():
     # Step 5 & 6: write to Weaviate using vectors and then read back
     log_kv("ROLE_PIPELINE_STEP", step="5/6", action="write_weaviate")
     os.environ.setdefault("SKIP_WEAVIATE_VECTORIZER_CHECK", "1")
-    from utils.weaviate_store import WeaviateStore
+    from store.weaviate_store import WeaviateStore
     ws = WeaviateStore()
     ws.ensure_schema()
 
-    # Map fields into RoleDocument attributes expected by write_role_to_db
+    # Map fields into RoleDocument attributes expected by RoleStore.write
     def rget(k: str):
         v = (fields or {}).get(k)
         return v
@@ -484,7 +484,7 @@ def api_roles_pipeline():
         "non_technical_qualifications": rget("non_technical_qualifications") or "",
         "_vector": doc_vector if doc_vector else None,
     }
-    doc_res = ws.write_role_to_db(sha, p.name, text, attrs)
+    doc_res = ws.roles.write(sha, p.name, text, attrs)
 
     # Upsert sections with vectors
     for idx, title in enumerate(titles):
@@ -494,7 +494,7 @@ def api_roles_pipeline():
 
     # Readback
     log_kv("ROLE_PIPELINE_STEP", step="6/6", action="readback_weaviate")
-    doc = ws.read_role_from_db(sha)
+    doc = ws.roles.read(sha)
     secs = ws.read_role_sections(sha)
 
     log_kv("ROLE_PIPELINE_COMPLETE", sha=sha, filename=p.name)
@@ -533,7 +533,7 @@ def api_roles_pipeline_batch():
     errors: list[str] = []
     max_bytes = get_max_file_mb() * 1024 * 1024
     os.environ.setdefault("SKIP_WEAVIATE_VECTORIZER_CHECK", "1")
-    from utils.weaviate_store import WeaviateStore
+    from store.weaviate_store import WeaviateStore
     from utils.extractors import pdf_to_text, docx_to_text
     from utils.slice import slice_sections
     ws = WeaviateStore()
@@ -551,7 +551,7 @@ def api_roles_pipeline_batch():
 
             sha = sha256_file(p)
             # Skip if already exists
-            existing = ws.read_role_from_db(sha)
+            existing = ws.roles.read(sha)
             if existing:
                 log_kv("ROLE_BATCH_SKIP_EXISTS", sha=sha, filename=p.name)
                 continue
@@ -611,7 +611,7 @@ def api_roles_pipeline_batch():
                 "non_technical_qualifications": rget("non_technical_qualifications") or "",
                 "_vector": doc_vector if doc_vector else None,
             }
-            ws.write_role_to_db(sha, p.name, text, attrs)
+            ws.roles.write(sha, p.name, text, attrs)
 
             for idx, title in enumerate(titles):
                 sec_text = sections_map[title]
@@ -888,11 +888,11 @@ def api_applicants_pipeline():
     # Step 5 & 6: write to Weaviate using vectors and then read back
     log_kv("PIPELINE_STEP", step="5/6", action="write_weaviate")
     os.environ.setdefault("SKIP_WEAVIATE_VECTORIZER_CHECK", "1")
-    from utils.weaviate_store import WeaviateStore
+    from store.weaviate_store import WeaviateStore
     ws = WeaviateStore()
     ws.ensure_schema()
 
-    # Map fields into CVDocument attributes expected by write_cv_to_db
+    # Map fields into CVDocument attributes expected by CVStore.write
     def fget(k: str) -> str:
         v = (fields or {}).get(k)
         if isinstance(v, list):
@@ -928,7 +928,7 @@ def api_applicants_pipeline():
         "flag_worked_at_financial_institution": fget("worked_at_financial_institution"),
         "flag_worked_for_egyptian_government": fget("worked_for_egyptian_government"),
     }
-    doc_res = ws.write_cv_to_db(sha, p.name, text, attrs)
+    doc_res = ws.cv.write(sha, p.name, text, attrs)
 
     # Upsert sections with vectors
     for idx, title in enumerate(titles):
@@ -938,7 +938,7 @@ def api_applicants_pipeline():
 
     # Readback
     log_kv("PIPELINE_STEP", step="6/6", action="readback_weaviate")
-    doc = ws.read_cv_from_db(sha)
+    doc = ws.cv.read(sha)
     secs = ws.read_cv_sections(sha)
 
     log_kv("PIPELINE_COMPLETE", sha=sha, filename=p.name)
@@ -977,7 +977,7 @@ def api_applicants_pipeline_batch():
     errors = []
     max_bytes = get_max_file_mb() * 1024 * 1024
     os.environ.setdefault("SKIP_WEAVIATE_VECTORIZER_CHECK", "1")
-    from utils.weaviate_store import WeaviateStore
+    from store.weaviate_store import WeaviateStore
     from utils.extractors import pdf_to_text, docx_to_text
     from utils.slice import slice_sections
     ws = WeaviateStore()
@@ -995,7 +995,7 @@ def api_applicants_pipeline_batch():
 
             sha = sha256_file(p)
             # Skip if already exists in Weaviate
-            existing = ws.read_cv_from_db(sha)
+            existing = ws.cv.read(sha)
             if existing:
                 log_kv("BATCH_SKIP_EXISTS", sha=sha, filename=p.name)
                 continue
@@ -1064,7 +1064,7 @@ def api_applicants_pipeline_batch():
                 "flag_worked_at_financial_institution": fget("worked_at_financial_institution"),
                 "flag_worked_for_egyptian_government": fget("worked_for_egyptian_government"),
             }
-            ws.write_cv_to_db(sha, p.name, text, attrs)
+            ws.cv.write(sha, p.name, text, attrs)
 
             for idx, title in enumerate(titles):
                 sec_text = sections_map[title]
@@ -1113,9 +1113,9 @@ def api_applicants():
     """
     try:
         os.environ.setdefault("SKIP_WEAVIATE_VECTORIZER_CHECK", "1")
-        from utils.weaviate_store import WeaviateStore
+        from store.weaviate_store import WeaviateStore
         ws = WeaviateStore()
-        records = ws.list_all_cvs()
+        records = ws.cv.list()
         
         # Map Weaviate records to UI-friendly row format matching old CSV structure
         rows = []
@@ -1163,11 +1163,11 @@ def api_applicants():
 def api_weaviate_cv_read(sha: str):
     """Read-only endpoint to fetch CV document by sha from Weaviate (safe)."""
     try:
-        from utils.weaviate_store import WeaviateStore
+        from store.weaviate_store import WeaviateStore
         ws = WeaviateStore()
         if not ws.client:
             return jsonify({"error": "Weaviate not configured"}), 503
-        obj = ws.read_cv_from_db(sha)
+        obj = ws.cv.read(sha)
         if not obj:
             return jsonify({"error": "Not found"}), 404
         return jsonify(obj)
@@ -1179,11 +1179,11 @@ def api_weaviate_cv_read(sha: str):
 def api_weaviate_cv_all(sha: str):
     """Return document and sections for a CV by sha."""
     try:
-        from utils.weaviate_store import WeaviateStore
+        from store.weaviate_store import WeaviateStore
         ws = WeaviateStore()
         if not ws.client:
             return jsonify({"error": "Weaviate not configured"}), 503
-        doc = ws.read_cv_from_db(sha)
+        doc = ws.cv.read(sha)
         if not doc:
             return jsonify({"error": "Not found"}), 404
         secs = ws.read_cv_sections(sha)
@@ -1213,11 +1213,11 @@ def api_weaviate_cv_by_path():
 def api_weaviate_role_read(sha: str):
     """Read-only endpoint to fetch Role data by sha from Weaviate (safe)."""
     try:
-        from utils.weaviate_store import WeaviateStore
+        from store.weaviate_store import WeaviateStore
         ws = WeaviateStore()
         if not ws.client:
             return jsonify({"error": "Weaviate not configured"}), 503
-        obj = ws.read_role_from_db(sha)
+        obj = ws.roles.read(sha)
         if not obj:
             return jsonify({"error": "Not found"}), 404
         return jsonify(obj)
@@ -1230,11 +1230,11 @@ def api_weaviate_role_read(sha: str):
 def api_weaviate_role_all(sha: str):
     """Return role document and sections by sha."""
     try:
-        from utils.weaviate_store import WeaviateStore
+        from store.weaviate_store import WeaviateStore
         ws = WeaviateStore()
         if not ws.client:
             return jsonify({"error": "Weaviate not configured"}), 503
-        doc = ws.read_role_from_db(sha)
+        doc = ws.roles.read(sha)
         if not doc:
             return jsonify({"error": "Not found"}), 404
         secs = ws.read_role_sections(sha)
@@ -1261,11 +1261,139 @@ def api_weaviate_role_by_path():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/roles/repair", methods=["POST"])
+def api_roles_repair():
+    """Repair existing RoleDocument records by populating missing attributes and vectors.
+
+    Body (optional): { "shas": ["..."], "limit": 0, "force": false }
+
+    - When no SHAs provided, processes all roles.
+    - When force=false (default), only updates roles where core attributes are empty.
+    - Also slices sections and upserts with embeddings.
+    """
+    try:
+        payload = request.get_json(silent=True) or {}
+        shas = payload.get("shas") or []
+        limit = int(payload.get("limit") or 0)
+        force = bool(payload.get("force", False))
+
+        os.environ.setdefault("SKIP_WEAVIATE_VECTORIZER_CHECK", "1")
+        from store.weaviate_store import WeaviateStore
+        from utils.slice import slice_sections
+        ws = WeaviateStore()
+        ws.ensure_schema()
+
+        # Determine target SHAs
+        targets: list[str] = []
+        if shas:
+            targets = [str(s) for s in shas]
+        else:
+            rows = ws.roles.list()
+            targets = [str(r.get("sha")) for r in rows if r.get("sha")]
+
+        if limit and limit > 0:
+            targets = targets[:limit]
+
+        processed = 0
+        updated = 0
+        errors: list[str] = []
+
+        for sha in targets:
+            processed += 1
+            try:
+                doc = ws.roles.read(sha)
+                if not doc:
+                    continue
+                attrs = (doc.get("attributes") or {}) if isinstance(doc, dict) else {}
+                full_text = (doc.get("full_text") or "") if isinstance(doc, dict) else ""
+                filename = (doc.get("filename") or f"{sha}.txt") if isinstance(doc, dict) else f"{sha}.txt"
+
+                # Decide if repair needed
+                core_keys = [
+                    "job_title", "employer", "job_location", "must_have_skills",
+                    "technical_qualifications", "responsibilities",
+                ]
+                has_core = any((attrs.get(k) or "").strip() for k in core_keys)
+                if not force and has_core:
+                    continue  # already populated
+                if not full_text.strip():
+                    continue  # nothing to repair
+
+                # Extract fields from stored text
+                fields, err = openai_mgr.extract_role_fields_from_text(full_text)
+                if err:
+                    errors.append(f"{sha}: openai fields error: {err}")
+                    continue
+
+                # Compute embeddings: doc + sections
+                doc_vecs, err0 = openai_mgr.embed_texts([full_text])
+                if err0:
+                    errors.append(f"{sha}: embeddings(doc) error: {err0}")
+                    continue
+                doc_vector = doc_vecs[0] if doc_vecs else []
+
+                sections_map = slice_sections(full_text)
+                titles = list(sections_map.keys())
+                texts = [sections_map[t] for t in titles]
+                vectors, err2 = openai_mgr.embed_texts(texts)
+                if err2:
+                    errors.append(f"{sha}: embeddings(sections) error: {err2}")
+                    continue
+
+                # Map attributes
+                def rget(k: str):
+                    return (fields or {}).get(k)
+
+                new_attrs = {
+                    "timestamp": datetime.now().isoformat(),
+                    "role_title": (fields or {}).get("job_title") or attrs.get("role_title") or filename.rsplit(".", 1)[0],
+                    "job_title": rget("job_title") or filename.rsplit(".", 1)[0],
+                    "employer": rget("employer") or "",
+                    "job_location": rget("job_location") or "",
+                    "language_requirement": rget("language_requirement") or "",
+                    "onsite_requirement_percentage": rget("onsite_requirement_percentage"),
+                    "onsite_requirement_mandatory": rget("onsite_requirement_mandatory") or "",
+                    "serves_government": rget("serves_government") or "",
+                    "serves_financial_institution": rget("serves_financial_institution") or "",
+                    "min_years_experience": rget("min_years_experience"),
+                    "must_have_skills": rget("must_have_skills") or "",
+                    "should_have_skills": rget("should_have_skills") or "",
+                    "nice_to_have_skills": rget("nice_to_have_skills") or "",
+                    "min_must_have_degree": rget("min_must_have_degree") or "",
+                    "preferred_universities": rget("preferred_universities") or "",
+                    "responsibilities": rget("responsibilities") or "",
+                    "technical_qualifications": rget("technical_qualifications") or "",
+                    "non_technical_qualifications": rget("non_technical_qualifications") or "",
+                    "_vector": doc_vector if doc_vector else None,
+                }
+                ws.roles.write(sha, filename, full_text, new_attrs)
+
+                for idx, title in enumerate(titles):
+                    sec_text = sections_map[title]
+                    vec = vectors[idx] if vectors and idx < len(vectors) else None
+                    ws.upsert_role_section(sha, title, sec_text, vector=vec)
+
+                updated += 1
+                log_kv("ROLE_REPAIR_OK", sha=sha, filename=filename)
+            except Exception as e:
+                errors.append(f"{sha}: {e}")
+                log_kv("ROLE_REPAIR_ERR", sha=sha, error=str(e))
+
+        return jsonify({
+            "processed": processed,
+            "updated": updated,
+            "errors": errors,
+        })
+    except Exception as e:
+        log_kv("ROLE_REPAIR_FATAL", error=str(e))
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/weaviate/flush", methods=["POST"])
 def api_weaviate_flush():
     """Delete all CVDocument and CVSection objects from Weaviate."""
     try:
-        from utils.weaviate_store import WeaviateStore
+        from store.weaviate_store import WeaviateStore
         ws = WeaviateStore()
         if not ws.client:
             return jsonify({"error": "Weaviate not configured"}), 503

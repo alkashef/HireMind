@@ -1,9 +1,9 @@
-"""E2E pipeline for Roles (PDF/DOCX -> text -> fields -> sections -> embeddings -> Weaviate -> readback).
+"""E2E pipeline for Roles (PDF/DOCX -> text -> fields -> document embedding -> Weaviate -> readback).
 
-Runs non-interactively and writes artifacts to tests/data (configurable via env).
+Runs non-interactively and writes artifacts to tests/results (configurable via env).
 - Accepts both PDF and DOCX role files.
 - Sends text-only to OpenAI (no attachments).
-- Computes an embedding for the whole role document and per-section.
+- Computes an embedding for the whole role document (no sections).
 """
 from __future__ import annotations
 
@@ -20,27 +20,43 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from utils.logger import AppLogger
 from utils.extractors import pdf_to_text, docx_to_text, compute_sha256_bytes
-from utils.slice import slice_sections
 from utils.openai_manager import OpenAIManager
 from config.settings import AppConfig
 
 DEFAULT_ROLE_NAME = "Sample Role.pdf"
 
 
-def _role_e2e_json_path() -> Path:
-    p = Path(os.getenv("TEST_ROLE_E2E_JSON", "tests/role_e2e.json"))
-    if not p.is_absolute():
-        p = (PROJECT_ROOT / p).resolve()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    return p
+def _insert_tag_into_filename(base: Path, tag: str) -> Path:
+    """Insert a tag before the .json extension or append if no extension.
+
+    examples:
+      tests/role_e2e.json + pdf -> tests/role_e2e_pdf.json
+      tests/out.json + jd1_docx -> tests/out_jd1_docx.json
+      tests/out + tag -> tests/out_tag
+    """
+    stem = base.stem
+    suffix = base.suffix
+    if suffix.lower() == ".json":
+        return base.with_name(f"{stem}_{tag}{suffix}")
+    return base.with_name(f"{stem}_{tag}{suffix}")
 
 
-def _role_e2e_read_json_path() -> Path:
-    p = Path(os.getenv("TEST_ROLE_E2E_JSON_READ", "tests/role_e2e_read.json"))
-    if not p.is_absolute():
-        p = (PROJECT_ROOT / p).resolve()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    return p
+def _role_e2e_json_path(tag: str) -> Path:
+    base = Path(os.getenv("TEST_ROLE_E2E_JSON", "tests/role_e2e.json"))
+    if not base.is_absolute():
+        base = (PROJECT_ROOT / base).resolve()
+    out = _insert_tag_into_filename(base, tag)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def _role_e2e_read_json_path(tag: str) -> Path:
+    base = Path(os.getenv("TEST_ROLE_E2E_JSON_READ", "tests/role_e2e_read.json"))
+    if not base.is_absolute():
+        base = (PROJECT_ROOT / base).resolve()
+    out = _insert_tag_into_filename(base, tag)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    return out
 
 
 def _read_json(path: Path) -> Dict[str, Any]:
@@ -112,17 +128,17 @@ def init_logger() -> AppLogger:
 
 # Steps
 
-def step1_extract_text(logger: AppLogger, path: Path) -> Path:
+def step1_extract_text(logger: AppLogger, path: Path, tag: str) -> Path:
     ext = path.suffix.lower()
     logger.log_kv("ROLE_STEP_START", step="extract_text", file=str(path))
-    print("[1/6] Extracting role to text...")
+    print("[1/5] Extracting role to text...")
     if ext == ".pdf":
         text = pdf_to_text(path)
     elif ext == ".docx":
         text = docx_to_text(path)
     else:
         text = path.read_text(encoding="utf-8", errors="ignore")
-    out = _role_e2e_json_path()
+    out = _role_e2e_json_path(tag)
     payload = _read_json(out)
     payload["filename"] = path.name
     payload["sha"] = compute_sha256_bytes(path.read_bytes())
@@ -133,73 +149,49 @@ def step1_extract_text(logger: AppLogger, path: Path) -> Path:
     return out
 
 
-def step2_openai_fields(logger: AppLogger, role_path: Path) -> Path:
+def step2_openai_fields(logger: AppLogger, role_path: Path, tag: str) -> Path:
     logger.log_kv("ROLE_STEP_START", step="openai_extract_fields", file=str(role_path))
-    print("[2/6] OpenAI: extracting role fields (single call)...")
+    print("[2/5] OpenAI: extracting role fields (single call)...")
     cfg = AppConfig()
     mgr = OpenAIManager(cfg, logger)
     data, err = mgr.extract_role_fields(role_path)
     if err:
         logger.log_kv("ROLE_OPENAI_ERROR", error=err)
         raise RuntimeError(f"OpenAI extraction failed: {err}")
-    out = _role_e2e_json_path()
+    out = _role_e2e_json_path(tag)
     payload = _read_json(out)
-    payload["fields"] = data or {}
+    # Store role attributes under 'attributes' (not 'fields')
+    payload["attributes"] = data or {}
     _write_json(out, payload)
     logger.log_kv("ROLE_STEP_DONE", step="openai_extract_fields", keys=len((data or {}).keys()))
-    print(f"UPDATED: {out} (fields)")
+    print(f"UPDATED: {out} (attributes)")
     return out
 
 
-def step3_slice_sections(logger: AppLogger, e2e_json: Path) -> Path:
-    logger.log_kv("ROLE_STEP_START", step="slice_sections", src=str(e2e_json))
-    print("[3/6] Slicing text into sections...")
-    payload = _read_json(e2e_json)
-    text = payload.get("text", "")
-    sections = slice_sections(text)
-    payload["sections"] = sections
-    _write_json(e2e_json, payload)
-    logger.log_kv("ROLE_STEP_DONE", step="slice_sections", count=len(sections))
-    print(f"UPDATED: {e2e_json} (sections)")
-    return e2e_json
-
-
-def step4_embeddings(logger: AppLogger, e2e_json: Path) -> Path:
-    logger.log_kv("ROLE_STEP_START", step="embed", src=str(e2e_json))
-    print("[4/6] Computing embeddings (doc + sections)...")
+def step3_embeddings_doc(logger: AppLogger, e2e_json: Path) -> Path:
+    logger.log_kv("ROLE_STEP_START", step="embed_doc", src=str(e2e_json))
+    print("[3/5] Computing embeddings (document only)...")
     cfg = AppConfig()
     mgr = OpenAIManager(cfg, logger)
     payload = _read_json(e2e_json)
     text = payload.get("text", "")
-    sections_map: Dict[str, str] = payload.get("sections", {}) or {}
-
-    # Document embedding
     doc_vecs, err0 = mgr.embed_texts([text])
     if err0:
         raise RuntimeError(f"Embeddings (doc) failed: {err0}")
     doc_vector = doc_vecs[0] if doc_vecs else []
-
-    # Sections embeddings
-    titles: List[str] = list(sections_map.keys())
-    texts: List[str] = [sections_map[t] for t in titles]
-    sec_vectors, err = mgr.embed_texts(texts)
-    if err:
-        raise RuntimeError(f"Embeddings (sections) failed: {err}")
-
     model = os.getenv("OPENAI_EMBEDDING_MODEL") or "text-embedding-3-small"
-    emb_map = {title: (sec_vectors[i] if i < len(sec_vectors) else []) for i, title in enumerate(titles)}
-    payload["embeddings"] = {"model": model, "doc_vector": doc_vector, "embeddings": emb_map}
+    payload["embeddings"] = {"model": model, "vector": doc_vector}
     _write_json(e2e_json, payload)
-    logger.log_kv("ROLE_STEP_DONE", step="embed", sec_count=len(emb_map))
-    print(f"UPDATED: {e2e_json} (embeddings)")
+    logger.log_kv("ROLE_STEP_DONE", step="embed_doc")
+    print(f"UPDATED: {e2e_json} (doc embeddings)")
     return e2e_json
 
 
-def step5_write_weaviate(logger: AppLogger, role_path: Path, e2e_json: Path) -> Path:
+def step4_write_weaviate(logger: AppLogger, role_path: Path, e2e_json: Path) -> Path:
     logger.log_kv("ROLE_STEP_START", step="weaviate_write")
-    print("[5/6] Writing role and sections to Weaviate...")
+    print("[4/5] Writing role to Weaviate (no sections)...")
     os.environ.setdefault("SKIP_WEAVIATE_VECTORIZER_CHECK", "1")
-    from utils.weaviate_store import WeaviateStore
+    from store.weaviate_store import WeaviateStore
     ws = WeaviateStore()
     ws.ensure_schema()
 
@@ -207,77 +199,79 @@ def step5_write_weaviate(logger: AppLogger, role_path: Path, e2e_json: Path) -> 
     sha = payload.get("sha") or compute_sha256_bytes(role_path.read_bytes())
     filename = payload.get("filename", role_path.name)
     text = payload.get("text", "")
-    fields: Dict[str, Any] = payload.get("fields", {}) or {}
-    doc_vector: List[float] = (payload.get("embeddings", {}) or {}).get("doc_vector", []) or []
+    attributes: Dict[str, Any] = payload.get("attributes", {}) or {}
+    doc_vector: List[float] = (payload.get("embeddings", {}) or {}).get("vector", []) or []
 
-    # Persist all known role attributes to Weaviate so readback mirrors role_e2e.json
     attrs = {
         "timestamp": os.getenv("ROLE_TIMESTAMP") or "",
-        # Prefer extracted job_title as the role title; fallback to filename stem
-        "role_title": fields.get("job_title") or Path(filename).stem,
+        "role_title": attributes.get("job_title") or Path(filename).stem,
         "_vector": doc_vector if doc_vector else None,
-        # Extended attributes (pass-through; utils.weaviate_store.write_role_to_db normalizes types)
-        "job_title": fields.get("job_title"),
-        "employer": fields.get("employer"),
-        "job_location": fields.get("job_location"),
-        "language_requirement": fields.get("language_requirement"),
-        "onsite_requirement_percentage": fields.get("onsite_requirement_percentage"),
-        "onsite_requirement_mandatory": fields.get("onsite_requirement_mandatory"),
-        "serves_government": fields.get("serves_government"),
-        "serves_financial_institution": fields.get("serves_financial_institution"),
-        "min_years_experience": fields.get("min_years_experience"),
-        "must_have_skills": fields.get("must_have_skills"),
-        "should_have_skills": fields.get("should_have_skills"),
-        "nice_to_have_skills": fields.get("nice_to_have_skills"),
-        "min_must_have_degree": fields.get("min_must_have_degree"),
-        "preferred_universities": fields.get("preferred_universities"),
-        "responsibilities": fields.get("responsibilities"),
-        "technical_qualifications": fields.get("technical_qualifications"),
-        "non_technical_qualifications": fields.get("non_technical_qualifications"),
+        # Extended attributes mapped 1:1 from fields
+        "job_title": attributes.get("job_title"),
+        "employer": attributes.get("employer"),
+        "job_location": attributes.get("job_location"),
+        "language_requirement": attributes.get("language_requirement"),
+        "onsite_requirement_percentage": attributes.get("onsite_requirement_percentage"),
+        "onsite_requirement_mandatory": attributes.get("onsite_requirement_mandatory"),
+        "serves_government": attributes.get("serves_government"),
+        "serves_financial_institution": attributes.get("serves_financial_institution"),
+        "min_years_experience": attributes.get("min_years_experience"),
+        "must_have_skills": attributes.get("must_have_skills"),
+        "should_have_skills": attributes.get("should_have_skills"),
+        "nice_to_have_skills": attributes.get("nice_to_have_skills"),
+        "min_must_have_degree": attributes.get("min_must_have_degree"),
+        "preferred_universities": attributes.get("preferred_universities"),
+        "responsibilities": attributes.get("responsibilities"),
+        "technical_qualifications": attributes.get("technical_qualifications"),
+        "non_technical_qualifications": attributes.get("non_technical_qualifications"),
     }
-    doc_res = ws.write_role_to_db(sha, filename, text, attrs)
-
-    # Upsert sections with vectors (if present)
-    sections_map: Dict[str, str] = payload.get("sections", {}) or {}
-    sec_vecs: Dict[str, List[float]] = (payload.get("embeddings", {}) or {}).get("embeddings", {}) or {}
-    for title, content in sections_map.items():
-        vec = sec_vecs.get(title)
-        ws.upsert_role_section(sha, title, content, vector=vec)
-
-    # Readback to confirm
-    doc = ws.read_role_from_db(sha)
-    if not doc:
-        raise RuntimeError("Weaviate returned no RoleDocument after write")
-    secs = ws.read_role_sections(sha)
-
-    payload["weaviate"] = {"ok": True, "sha": sha, "id": (doc_res or {}).get("id")}
-    _write_json(e2e_json, payload)
-    logger.log_kv("ROLE_STEP_DONE", step="weaviate_write", sections=len(secs))
+    doc_res = ws.roles.write(sha, filename, text, attrs)
+    # Normalize id from write response
+    doc_id = (doc_res.get("id") if isinstance(doc_res, dict) else doc_res)
+    # Rebuild payload in the exact requested order and structure
+    model = (payload.get("embeddings", {}) or {}).get("model")
+    vector = doc_vector
+    ordered = {
+        "id": doc_id,
+        "sha": sha,
+        "filename": filename,
+        "text": text,
+        "embeddings": {
+            "model": model,
+            "vector": vector,
+        },
+        "attributes": attributes,
+    }
+    _write_json(e2e_json, ordered)
+    logger.log_kv("ROLE_STEP_DONE", step="weaviate_write")
     return e2e_json
 
 
-def step6_readback(logger: AppLogger, e2e_json: Path) -> Path:
+def step5_readback(logger: AppLogger, e2e_json: Path, tag: str) -> Path:
     logger.log_kv("ROLE_STEP_START", step="weaviate_read")
-    print("[6/6] Reading role and sections from Weaviate...")
-    from utils.weaviate_store import WeaviateStore
+    print("[5/5] Reading role from Weaviate...")
+    from store.weaviate_store import WeaviateStore
 
     payload = _read_json(e2e_json)
     sha = payload.get("sha")
     ws = WeaviateStore()
-    doc = ws.read_role_from_db(sha)
-    secs = ws.read_role_sections(sha)
-
+    doc = ws.roles.read(sha)
     out = {
         "sha": sha,
         "document": doc,
-        "sections": secs,
-        "checks": {"doc_ok": bool(doc and doc.get("sha") == sha), "sections": len(secs)},
+        "checks": {"doc_ok": bool(doc and doc.get("sha") == sha)},
     }
-    out_path = _role_e2e_read_json_path()
+    out_path = _role_e2e_read_json_path(tag)
     out_path.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.log_kv("ROLE_STEP_DONE", step="weaviate_read", count=len(secs))
     print(f"WROTE: {out_path}")
     return out_path
+
+
+def tag_from_path(p: Path) -> str:
+    ext = p.suffix.lower().lstrip('.') or 'txt'
+    stem = p.stem.replace(' ', '_')
+    return f"{stem}_{ext}"
 
 
 def main(argv: List[str]) -> int:
@@ -293,12 +287,12 @@ def main(argv: List[str]) -> int:
     for idx, rp in enumerate(paths, start=1):
         try:
             print(f"\n=== Running role E2E for {rp.name} ({idx}/{len(paths)}) ===")
-            e2e = step1_extract_text(logger, rp)
-            e2e = step2_openai_fields(logger, rp)
-            e2e = step3_slice_sections(logger, e2e)
-            e2e = step4_embeddings(logger, e2e)
-            _ = step5_write_weaviate(logger, rp, e2e)
-            _ = step6_readback(logger, e2e)
+            tag = tag_from_path(rp)
+            e2e = step1_extract_text(logger, rp, tag)
+            e2e = step2_openai_fields(logger, rp, tag)
+            e2e = step3_embeddings_doc(logger, e2e)
+            e2e = step4_write_weaviate(logger, rp, e2e)
+            _ = step5_readback(logger, e2e, tag)
         except Exception as exc:
             overall_ok = False
             logger.log_kv("ROLE_E2E_ERROR", file=str(rp), error=str(exc))

@@ -50,6 +50,6 @@
 - Avoid repetition of instructions or disclaimers.
 - Be **very concise and to the point.**
 - Less verbose is better.
-- Explain root causes of issues in a one-liner. 
+- Explain root causes of issues in a one-liner.
 - Explain solutions in a one-liner.
 - Don't explain your internal thought process and todo steps unless asked.

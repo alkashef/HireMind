@@ -1,15 +1,7 @@
-"""E2E pipeline (6 steps): PDF -> text -> fields -> sections -> embeddings -> Weaviate -> readback.
+"""E2E pipeline (5 steps): PDF/DOCX -> text -> fields -> doc embedding -> Weaviate -> readback.
 
-Redesigned to run non-interactively in 6 clear steps, saving artifacts to JSON
-files under tests/data (configurable via env). Uses only utils/* modules.
-
-Steps
-1) Extract PDF to text and save to JSON
-2) Call OpenAI via utils.openai_manager to extract fields JSON (single call)
-3) Slice text into titled sections using utils.slice.slice_sections, save JSON
-4) Compute OpenAI embeddings for each section, save embeddings JSON
-5) Write document and sections to Weaviate (server-side vectors)
-6) Read back document and sections from Weaviate and write a separate verification JSON
+Runs non-interactively, saving artifacts to tests/results (configurable via env).
+Sections are no longer used; only document-level embeddings are computed and stored.
 """
 
 from __future__ import annotations
@@ -18,7 +10,8 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
+from datetime import datetime
 
 # Ensure project root is on sys.path so local package imports (utils.*) work
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -27,7 +20,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from utils.logger import AppLogger
 from utils.extractors import pdf_to_text, docx_to_text, compute_sha256_bytes
-from utils.slice import slice_sections
 from utils.openai_manager import OpenAIManager
 from config.settings import AppConfig
 
@@ -51,8 +43,46 @@ def _read_payload(path: Path) -> Dict[str, Any]:
     return {}
 
 
+def _ordered_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a new dict with keys ordered as required for E2E output.
+
+    Order:
+      id, sha, filename, timestamp, text, embeddings {model, vector}, attributes, ...others
+    """
+    out: Dict[str, Any] = {}
+    # Top-level ordered keys
+    for key in ("id", "sha", "filename", "timestamp", "text"):
+        if key in payload:
+            out[key] = payload[key]
+
+    # Embeddings with sub-order model -> vector
+    if "embeddings" in payload and isinstance(payload["embeddings"], dict):
+        emb = payload["embeddings"]
+        emb_out: Dict[str, Any] = {}
+        if "model" in emb:
+            emb_out["model"] = emb["model"]
+        if "vector" in emb:
+            emb_out["vector"] = emb["vector"]
+        # Append any other keys in embeddings afterward
+        for k, v in emb.items():
+            if k not in emb_out:
+                emb_out[k] = v
+        out["embeddings"] = emb_out
+
+    # Attributes
+    if "attributes" in payload:
+        out["attributes"] = payload["attributes"]
+
+    # Any other keys go last (preserve their insertion order but skip ones already included)
+    for k, v in payload.items():
+        if k not in out:
+            out[k] = v
+    return out
+
+
 def _write_payload(path: Path, payload: Dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    ordered = _ordered_payload(payload)
+    path.write_text(json.dumps(ordered, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def _e2e_read_json_path() -> Path:
@@ -90,7 +120,7 @@ def resolve_cv_paths(arg_path: Optional[str] = None) -> list[Path]:
     - If arg_path provided and exists, use only that
     - Else include TEST_CV_PATH if it exists
     - Also include TEST_CV_DOCX_PATH if it exists
-    - Else fallback to default sample PDF under tests/data
+    - Else fallback to default sample PDF under tests/results
     """
     found: list[Path] = []
     def _norm(p: Path) -> Path:
@@ -137,7 +167,7 @@ def step1_extract_pdf_to_json(logger: AppLogger, pdf_path: Path) -> Path:
     Note: Function name kept for compatibility with previous references.
     """
     logger.log_kv("STEP_START", step="extract_text", file=str(pdf_path))
-    print("[1/6] Extracting document to text...")
+    print("[1/5] Extracting document to text...")
     ext = pdf_path.suffix.lower()
     if ext == ".pdf":
         text = pdf_to_text(pdf_path)
@@ -154,6 +184,8 @@ def step1_extract_pdf_to_json(logger: AppLogger, pdf_path: Path) -> Path:
         sha = ""
     payload["sha"] = sha
     payload["filename"] = pdf_path.name
+    # Timestamp of processing (local time)
+    payload["timestamp"] = datetime.now().isoformat(timespec="seconds")
     payload["text"] = text
     _write_payload(out_path, payload)
     logger.log_kv("STEP_COMPLETE", step="extract_text", out=str(out_path), chars=len(text))
@@ -163,7 +195,7 @@ def step1_extract_pdf_to_json(logger: AppLogger, pdf_path: Path) -> Path:
 
 def step2_openai_extract_fields(logger: AppLogger, pdf_path: Path) -> Path:
     logger.log_kv("STEP_START", step="openai_extract_fields", file=str(pdf_path))
-    print("[2/6] OpenAI: extracting fields (single call)...")
+    print("[2/5] OpenAI: extracting fields (single call)...")
     cfg = AppConfig()
     mgr = OpenAIManager(cfg, logger)
     data, err = mgr.extract_full_name(pdf_path)
@@ -172,53 +204,77 @@ def step2_openai_extract_fields(logger: AppLogger, pdf_path: Path) -> Path:
         raise RuntimeError(f"OpenAI extraction failed: {err}")
     out_path = _e2e_json_path()
     payload = _read_payload(out_path)
-    payload["fields"] = data or {}
+    # Store extracted attributes under 'attributes' instead of 'fields'
+    payload["attributes"] = data or {}
     _write_payload(out_path, payload)
     logger.log_kv("STEP_COMPLETE", step="openai_extract_fields", out=str(out_path), keys=len((data or {}).keys()))
     print(f"UPDATED: {out_path} (fields)")
     return out_path
 
 
-def step3_slice_sections(logger: AppLogger, e2e_json: Path) -> Path:
-    logger.log_kv("STEP_START", step="slice_sections", src=str(e2e_json))
-    print("[3/6] Slicing text into titled sections...")
-    payload = _read_payload(e2e_json)
-    text = payload.get("text", "")
-    sec_map = slice_sections(text)
-    payload["sections"] = sec_map
-    _write_payload(e2e_json, payload)
-    logger.log_kv("STEP_COMPLETE", step="slice_sections", out=str(e2e_json), count=len(sec_map))
-    print(f"UPDATED: {e2e_json} (sections)")
-    return e2e_json
-
-
-def step4_embed_sections(logger: AppLogger, e2e_json: Path) -> Path:
-    logger.log_kv("STEP_START", step="embed_sections", src=str(e2e_json))
-    print("[4/6] Computing OpenAI embeddings (doc + sections)...")
+def step3_embed_doc(logger: AppLogger, e2e_json: Path) -> Path:
+    logger.log_kv("STEP_START", step="embed_doc", src=str(e2e_json))
+    print("[3/5] Computing OpenAI embeddings (document only)...")
     cfg = AppConfig()
     mgr = OpenAIManager(cfg, logger)
     payload = _read_payload(e2e_json)
     text_full: str = payload.get("text", "")
-    sec_map: Dict[str, str] = payload.get("sections", {}) or {}
-    titles: List[str] = list(sec_map.keys())
-    texts: List[str] = [sec_map[t] for t in titles]
-    # document embedding
     doc_vecs, err0 = mgr.embed_texts([text_full])
     if err0:
         logger.log_kv("ERROR", step="embed_doc", error=err0)
         raise RuntimeError(f"Embeddings failed (doc): {err0}")
     doc_vector = doc_vecs[0] if doc_vecs else []
-    # section embeddings
-    vectors, err = mgr.embed_texts(texts)
-    if err:
-        logger.log_kv("ERROR", step="embed_sections", error=err)
-        raise RuntimeError(f"Embeddings failed (sections): {err}")
     model = os.getenv("OPENAI_EMBEDDING_MODEL") or "text-embedding-3-small"
-    emb_map = {title: (vectors[i] if i < len(vectors) else []) for i, title in enumerate(titles)}
-    payload["embeddings"] = {"model": model, "doc_vector": doc_vector, "embeddings": emb_map}
+    payload["embeddings"] = {"model": model, "vector": doc_vector}
     _write_payload(e2e_json, payload)
-    logger.log_kv("STEP_COMPLETE", step="embed_sections", out=str(e2e_json), count=len(emb_map))
-    print(f"UPDATED: {e2e_json} (embeddings)")
+    logger.log_kv("STEP_COMPLETE", step="embed_doc", out=str(e2e_json))
+    print(f"UPDATED: {e2e_json} (doc embeddings)")
+    return e2e_json
+
+
+def step4_write_to_weaviate(logger: AppLogger, pdf: Path, e2e_json: Path) -> Path:
+    logger.log_kv("STEP_START", step="weaviate_write")
+    print("[4/5] Writing CV to Weaviate (no sections)...")
+    from store.weaviate_store import WeaviateStore
+
+    # Load artifacts
+    payload = _read_payload(e2e_json)
+    doc_props: Dict[str, Any] = {}
+    sha = payload.get("sha") or compute_sha256_bytes(pdf.read_bytes())
+    filename = payload.get("filename", pdf.name)
+    full_text = payload.get("text", "")
+
+    # Attributes contains all scalar properties except sha/filename/full_text
+    fields_or_attrs: Dict[str, Any] = payload.get("attributes", {}) or {}
+    attrs = _map_fields_to_weaviate(fields_or_attrs)
+    attrs.update({
+        "timestamp": payload.get("timestamp", ""),
+    })
+    # Attach document-level vector when present
+    try:
+        doc_vector = (payload.get("embeddings", {}) or {}).get("vector")
+        if doc_vector:
+            attrs["_vector"] = doc_vector
+    except Exception:
+        pass
+
+    # Write document
+    ws = WeaviateStore()
+    ws.ensure_schema()
+    ws.cv.write(sha=sha, filename=filename, full_text=full_text, attributes=attrs)
+
+    # Verify readback
+    readback = ws.cv.read(sha)
+    if not readback:
+        logger.log_kv("ERROR", step="weaviate_empty_read", sha=sha)
+        raise RuntimeError(f"Weaviate returned no document for sha={sha} after write")
+
+    # Update consolidated JSON with a short Weaviate status
+    payload["id"] = readback.get("id")
+    payload["weaviate"] = {"ok": True, "sha": sha, "id": readback.get("id")}
+    _write_payload(e2e_json, payload)
+    logger.log_kv("STEP_COMPLETE", step="weaviate_write")
+    print("Weaviate write complete.")
     return e2e_json
 
 
@@ -278,43 +334,7 @@ def _coerce_types(props: Dict[str, Any], types_map: Dict[str, str]) -> Dict[str,
 
 
 def _build_weaviate_payload(logger: AppLogger, e2e_json: Path) -> Path:
-    """Derive weaviate-ready document and sections from consolidated payload.
-
-    Writes keys:
-    - weaviate_document: dict matching CVDocument properties
-    - weaviate_sections: list of dicts matching CVSection properties
-    """
-    payload = _read_payload(e2e_json)
-    schema = _load_schema()
-    types_map = _collect_prop_types(schema, "CVDocument")
-
-    sha = payload.get("sha", "")
-    filename = payload.get("filename", "")
-    text = payload.get("text", "")
-    fields: Dict[str, Any] = payload.get("fields", {}) or {}
-
-    # Map AI fields -> CVDocument property names
-    mapped = _map_fields_to_weaviate(fields)
-    mapped.update({
-        "sha": sha,
-        "timestamp": payload.get("timestamp", ""),
-        "cv": json.dumps({"fields": fields, "has_embeddings": bool(payload.get("embeddings"))}, ensure_ascii=False),
-        "filename": filename,
-        "full_text": text,
-    })
-    mapped = _coerce_types(mapped, types_map)
-
-    # Sections
-    sections_map: Dict[str, str] = payload.get("sections", {}) or {}
-    sections_list = [
-        {"parent_sha": sha, "section_type": title, "section_text": content}
-        for title, content in sections_map.items()
-    ]
-
-    payload["weaviate_document"] = mapped
-    payload["weaviate_sections"] = sections_list
-    _write_payload(e2e_json, payload)
-    logger.log_kv("WEAVIATE_PAYLOAD_BUILT", doc_keys=len(mapped), sections=len(sections_list))
+    # Deprecated: sections removed; payload building handled inline in step4
     return e2e_json
 
 
@@ -354,125 +374,10 @@ def _map_fields_to_weaviate(attrs: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def step5_write_to_weaviate(logger: AppLogger, pdf: Path, e2e_json: Path) -> Path:
-    logger.log_kv("STEP_START", step="weaviate_write")
-    print("[5/6] Writing document and sections to Weaviate...")
-    from utils.weaviate_store import WeaviateStore
-
-    # Load artifacts
-    # Ensure weaviate payload exists and is up-to-date
-    _build_weaviate_payload(logger, e2e_json)
-    payload = _read_payload(e2e_json)
-    raw = payload
-    doc_props: Dict[str, Any] = payload.get("weaviate_document", {}) or {}
-    sections_list: List[Dict[str, Any]] = payload.get("weaviate_sections", []) or []
-    # Map section titles to vectors (if available)
-    sec_vecs: Dict[str, List[float]] = {}
-    try:
-        e = payload.get("embeddings", {}) or {}
-        sec_vecs = e.get("embeddings", {}) or {}
-    except Exception:
-        sec_vecs = {}
-
-    # Compute sha and initialize client
-    sha = payload.get("sha") or compute_sha256_bytes(pdf.read_bytes())
-    # We don't require server vectorizers; use client-provided vectors
-    os.environ.setdefault("SKIP_WEAVIATE_VECTORIZER_CHECK", "1")
-    ws = WeaviateStore()
-    ws.ensure_schema()
-
-    # Upsert document
-    # Split props into known fields for write_cv_to_db: it expects attributes + full_text separately
-    full_text = doc_props.pop("full_text", raw.get("text", ""))
-    filename = doc_props.pop("filename", pdf.name)
-    # Attributes contains all scalar properties except sha/filename/full_text
-    attrs = {k: v for k, v in doc_props.items() if k not in ("sha",)}
-    # Attach document-level vector when present
-    try:
-        doc_vector = (raw.get("embeddings", {}) or {}).get("doc_vector")
-        if doc_vector:
-            attrs["_vector"] = doc_vector
-    except Exception:
-        pass
-    ws.write_cv_to_db(sha=sha, filename=filename, full_text=full_text, attributes=attrs)
-
-    # Upsert sections (server-side vectorization)
-    ok = True
-    for sec in sections_list:
-        title = sec.get("section_type", "section")
-        vec = sec_vecs.get(title)
-        up = ws.upsert_cv_section(
-            parent_sha=sec.get("parent_sha", sha),
-            section_type=title,
-            section_text=sec.get("section_text", ""),
-            vector=vec,
-        )
-        ok = ok and bool(up.get("weaviate_ok"))
-
-    # Verify readback
-    readback = ws.read_cv_from_db(sha)
-    if not readback:
-        logger.log_kv("ERROR", step="weaviate_empty_read", sha=sha)
-        raise RuntimeError(f"Weaviate returned no document for sha={sha} after write")
-
-    # Update consolidated JSON with a short Weaviate status
-    payload["weaviate"] = {"ok": True, "sha": sha, "id": readback.get("id")}
-    _write_payload(e2e_json, payload)
-
-    # Optional CSV dump path (kept for compatibility)
-    csv_out = os.environ.get("TEST_CV_CSV_OUTPUT")
-    if csv_out:
-        csv_path = Path(csv_out)
-        if not csv_path.is_absolute():
-            csv_path = PROJECT_ROOT / csv_path
-        csv_path.parent.mkdir(parents=True, exist_ok=True)
-        rows = []
-        def dtype(v):
-            if v is None:
-                return "null"
-            if isinstance(v, bool):
-                return "bool"
-            if isinstance(v, int):
-                return "int"
-            if isinstance(v, float):
-                return "float"
-            if isinstance(v, (list, tuple)):
-                return "list"
-            if isinstance(v, dict):
-                return "dict"
-            return "string"
-        rows.append(("id", dtype(readback.get("id")), readback.get("id")))
-        rows.append(("sha", dtype(readback.get("sha")), readback.get("sha")))
-        rows.append(("filename", dtype(readback.get("filename")), readback.get("filename")))
-        attrs_rb = readback.get("attributes", {}) or {}
-        for k, v in sorted(attrs_rb.items()):
-            val = v
-            if isinstance(v, (dict, list)):
-                try:
-                    val = json.dumps(v, ensure_ascii=False)
-                except Exception:
-                    val = str(v)
-            rows.append((k, dtype(v), val))
-        rows.append(("full_text", dtype(readback.get("full_text")), readback.get("full_text")))
-        with csv_path.open("w", encoding="utf-8") as fh:
-            fh.write("Attribute|Data Type|Value\n")
-            for a, t, v in rows:
-                line = f"{a}|{t}|{(v if v is not None else '')}\n"
-                fh.write(line)
-        logger.log_kv("STEP_COMPLETE", step="weaviate_write", csv=str(csv_path), sections=len(sections_list), ok=ok)
-        print(f"WROTE WEAVIATE CSV: {csv_path}")
-        return csv_path
-
-    logger.log_kv("STEP_COMPLETE", step="weaviate_write", sections=len(sections_list), ok=ok)
-    print("Weaviate write complete (CSV dump skipped).")
-    # return a log file path placeholder to keep signature
-    return Path(os.getenv("LOG_FILE_PATH", str(PROJECT_ROOT / "logs" / "weaviate_write.log")))
-
-
-def step6_read_from_weaviate(logger: AppLogger, e2e_json: Path) -> Path:
+def step5_read_from_weaviate(logger: AppLogger, e2e_json: Path) -> Path:
     logger.log_kv("STEP_START", step="weaviate_read")
-    print("[6/6] Reading CV and sections from Weaviate...")
-    from utils.weaviate_store import WeaviateStore
+    print("[5/5] Reading CV from Weaviate...")
+    from store.weaviate_store import WeaviateStore
 
     payload = _read_payload(e2e_json)
     sha = payload.get("sha")
@@ -480,40 +385,89 @@ def step6_read_from_weaviate(logger: AppLogger, e2e_json: Path) -> Path:
         raise RuntimeError("Missing sha in E2E JSON; cannot read back from Weaviate")
 
     ws = WeaviateStore()
-    doc = ws.read_cv_from_db(sha)
+    doc = ws.cv.read(sha)
     if not doc:
         raise RuntimeError(f"No CVDocument found for sha={sha}")
-    sections = ws.read_cv_sections(sha)
-
-    # Build simple checks against previous JSON
-    expected_sections = payload.get("weaviate_sections")
-    if not expected_sections:
-        # fallback to titles from sliced sections
-        expected_sections = [
-            {"parent_sha": sha, "section_type": t, "section_text": s}
-            for t, s in (payload.get("sections", {}) or {}).items()
-        ]
-    expected_count = len(expected_sections)
-    doc_ok = (doc.get("sha") == sha) and (doc.get("filename") == payload.get("filename"))
-    sections_count_ok = (len(sections) == expected_count)
 
     out = {
         "sha": sha,
         "document": doc,
-        "sections": sections,
-        "checks": {
-            "doc_ok": bool(doc_ok),
-            "sections_count_ok": bool(sections_count_ok),
-            "expected_sections": expected_count,
-            "actual_sections": len(sections),
-        },
+        "checks": {"doc_ok": bool(doc.get("sha") == sha and doc.get("filename") == payload.get("filename"))},
     }
 
     out_path = _e2e_read_json_path()
     out_path.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
-    logger.log_kv("STEP_COMPLETE", step="weaviate_read", out=str(out_path), doc_ok=doc_ok, count=len(sections))
+    logger.log_kv("STEP_COMPLETE", step="weaviate_read", out=str(out_path))
     print(f"WROTE: {out_path}")
     return out_path
+
+
+    # Legacy step removed; see step5_read_from_weaviate
+
+
+def _interactive_choose_path() -> Optional[Path]:
+    """Prompt the user to choose between configured PDF/DOCX paths or enter a custom path.
+
+    Returns a resolved Path or None if selection failed.
+    """
+    def _norm(p: Optional[str]) -> Optional[Path]:
+        if not p:
+            return None
+        q = Path(p)
+        return (PROJECT_ROOT / q).resolve() if not q.is_absolute() else q
+
+    cand: List[Tuple[str, Path]] = []
+    pdf_env = os.environ.get("TEST_CV_PATH")
+    docx_env = os.environ.get("TEST_CV_DOCX_PATH")
+    pdf_p = _norm(pdf_env)
+    docx_p = _norm(docx_env)
+    if pdf_p and pdf_p.exists():
+        cand.append(("PDF (TEST_CV_PATH)", pdf_p))
+    if docx_p and docx_p.exists():
+        cand.append(("DOCX (TEST_CV_DOCX_PATH)", docx_p))
+
+    print("Select input CV file:")
+    for i, (label, p) in enumerate(cand, start=1):
+        print(f"  {i}) {label}: {p}")
+    print(f"  {len(cand)+1}) Enter a custom absolute/relative path")
+
+    try:
+        choice = input(f"Enter choice [1-{len(cand)+1}]: ").strip()
+        idx = int(choice or "1")
+    except Exception:
+        idx = 1
+
+    if 1 <= idx <= len(cand):
+        return cand[idx-1][1]
+
+    # custom path
+    path_in = input("Enter path to CV (.pdf or .docx): ").strip().strip('"')
+    if not path_in:
+        return None
+    p = Path(path_in)
+    p = (PROJECT_ROOT / p).resolve() if not p.is_absolute() else p
+    return p if p.exists() else None
+
+
+def _interactive_choose_last_step() -> int:
+    """Prompt for the last step to run (always starts from 1). Returns 1..5."""
+    steps = [
+        "1) Extract text",
+        "2) OpenAI: extract fields",
+        "3) Compute document embedding",
+        "4) Write to Weaviate",
+        "5) Read back from Weaviate",
+    ]
+    print("\nSelect the last step to run (pipeline runs from step 1 up to your choice):")
+    for s in steps:
+        print("  " + s)
+    try:
+        val = int(input("Enter 1-5 [5]: ").strip() or "5")
+        if 1 <= val <= 5:
+            return val
+    except Exception:
+        pass
+    return 5
 
 
 def main(argv: list[str]) -> int:
@@ -522,9 +476,38 @@ def main(argv: list[str]) -> int:
     logger.log_kv("ENV_LOADED", count=len(loaded))
 
     arg = argv[1] if len(argv) > 1 else None
+
+    # Interactive mode when no path arg provided
+    if not arg:
+        sel = _interactive_choose_path()
+        if not sel:
+            msg = "No valid CV path selected. Aborting."
+            logger.log_kv("ERROR", reason="no_cv_selected", message=msg)
+            print(msg)
+            return 2
+        last_step = _interactive_choose_last_step()
+        try:
+            print(f"\n=== Running E2E pipeline for: {sel.name} (steps 1..{last_step}) ===")
+            e2e_json = step1_extract_pdf_to_json(logger, sel)
+            if last_step >= 2:
+                e2e_json = step2_openai_extract_fields(logger, sel)
+            if last_step >= 3:
+                e2e_json = step3_embed_doc(logger, e2e_json)
+            if last_step >= 4:
+                e2e_json = step4_write_to_weaviate(logger, sel, e2e_json)
+            if last_step >= 5:
+                _ = step5_read_from_weaviate(logger, e2e_json)
+        except Exception as exc:
+            logger.log_kv("ERROR", step="e2e_pipeline", file=str(sel), exc=str(exc))
+            print(f"E2E failed for {sel.name}: {exc}")
+            return 5
+        print("E2E pipeline completed successfully.")
+        return 0
+
+    # Non-interactive: behave like before (resolve by env + optional arg)
     cv_list = resolve_cv_paths(arg)
     if not cv_list:
-        msg = f"No CV found. Provide a path as an argument or place '{DEFAULT_CV_NAME}' under tests/data/"
+        msg = f"No CV found. Provide a path as an argument or place '{DEFAULT_CV_NAME}' under tests/results/"
         logger.log_kv("ERROR", reason="no_cv", message=msg)
         print(msg)
         return 2
@@ -535,10 +518,9 @@ def main(argv: list[str]) -> int:
             print(f"\n=== Running E2E pipeline for file {idx}/{len(cv_list)}: {cv.name} ===")
             e2e_json = step1_extract_pdf_to_json(logger, cv)
             e2e_json = step2_openai_extract_fields(logger, cv)
-            e2e_json = step3_slice_sections(logger, e2e_json)
-            e2e_json = step4_embed_sections(logger, e2e_json)
-            _ = step5_write_to_weaviate(logger, cv, e2e_json)
-            _ = step6_read_from_weaviate(logger, e2e_json)
+            e2e_json = step3_embed_doc(logger, e2e_json)
+            e2e_json = step4_write_to_weaviate(logger, cv, e2e_json)
+            _ = step5_read_from_weaviate(logger, e2e_json)
         except Exception as exc:
             overall_ok = False
             logger.log_kv("ERROR", step="e2e_pipeline", file=str(cv), exc=str(exc))

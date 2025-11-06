@@ -13,9 +13,9 @@ for /f "usebackq tokens=1,* delims==" %%a in ("..\config\.env") do (
     )
 )
 
-REM Default to data/weaviate_data if not found
+REM Default to store/weaviate_data if not found
 if "%WEAVIATE_DATA_PATH%"=="" (
-    set "WEAVIATE_DATA_PATH=data\weaviate_data"
+    set "WEAVIATE_DATA_PATH=store\weaviate_data"
 )
 
 REM Convert to absolute path from repo root
@@ -55,4 +55,4 @@ if errorlevel 1 (
 
 echo.
 echo All data flushed successfully.
-pause
+

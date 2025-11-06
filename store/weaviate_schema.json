@@ -36,15 +36,6 @@
         {"name": "full_text", "dataType": ["text"]}
       ]
     },
-    "CVSection": {
-      "class": "CVSection",
-      "vectorizer": "none",
-      "properties": [
-        {"name": "parent_sha", "dataType": ["string"]},
-        {"name": "section_type", "dataType": ["string"]},
-        {"name": "section_text", "dataType": ["text"]}
-      ]
-    },
     "RoleDocument": {
       "class": "RoleDocument",
       "vectorizer": "none",
@@ -57,29 +48,20 @@
         {"name": "job_title", "dataType": ["string"]},
         {"name": "employer", "dataType": ["string"]},
         {"name": "job_location", "dataType": ["string"]},
-        {"name": "language_requirement", "dataType": ["text"]},
+        {"name": "language_requirement", "dataType": ["string[]"]},
         {"name": "onsite_requirement_percentage", "dataType": ["int"]},
-        {"name": "onsite_requirement_mandatory", "dataType": ["string"]},
-        {"name": "serves_government", "dataType": ["string"]},
-        {"name": "serves_financial_institution", "dataType": ["string"]},
+        {"name": "onsite_requirement_mandatory", "dataType": ["boolean"]},
+        {"name": "serves_government", "dataType": ["boolean"]},
+        {"name": "serves_financial_institution", "dataType": ["boolean"]},
         {"name": "min_years_experience", "dataType": ["int"]},
-        {"name": "must_have_skills", "dataType": ["text"]},
-        {"name": "should_have_skills", "dataType": ["text"]},
-        {"name": "nice_to_have_skills", "dataType": ["text"]},
+        {"name": "must_have_skills", "dataType": ["string[]"]},
+        {"name": "should_have_skills", "dataType": ["string[]"]},
+        {"name": "nice_to_have_skills", "dataType": ["string[]"]},
         {"name": "min_must_have_degree", "dataType": ["string"]},
-        {"name": "preferred_universities", "dataType": ["text"]},
-        {"name": "responsibilities", "dataType": ["text"]},
-        {"name": "technical_qualifications", "dataType": ["text"]},
-        {"name": "non_technical_qualifications", "dataType": ["text"]}
-      ]
-    },
-    "RoleSection": {
-      "class": "RoleSection",
-      "vectorizer": "none",
-      "properties": [
-        {"name": "parent_sha", "dataType": ["string"]},
-        {"name": "section_type", "dataType": ["string"]},
-        {"name": "section_text", "dataType": ["text"]}
+        {"name": "preferred_universities", "dataType": ["string[]"]},
+        {"name": "responsibilities", "dataType": ["string[]"]},
+        {"name": "technical_qualifications", "dataType": ["string[]"]},
+        {"name": "non_technical_qualifications", "dataType": ["string[]"]}
       ]
     }
   }

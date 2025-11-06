@@ -73,9 +73,9 @@ def main() -> int:
     print(f"[OK] PDF extracted in {t1 - t0:.2f}s; length={len(pdf_text)} chars")
     print("[PDF SAMPLE]\n" + _truncate(pdf_text, 600))
 
-    # Dump extracted PDF text to tests/data/extracted_text.txt for inspection
+    # Dump extracted PDF text to tests/results/extracted_text.txt for inspection
     try:
-        out_dir = PROJECT_ROOT / "tests" / "data"
+        out_dir = PROJECT_ROOT / "tests" / "results"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "extracted_text.txt"
         with out_path.open("w", encoding="utf-8") as fh:

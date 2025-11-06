@@ -158,5 +158,6 @@ models/
 logs/*
 .env
 data/weaviate_data/*
-tests/data/*.json
-tests/data/*.csv
+store/weaviate_data/*
+tests/results/*.json
+tests/results/*.csv

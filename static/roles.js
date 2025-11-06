@@ -58,21 +58,31 @@ async function highlightRolesDuplicates(files) {
         try {
           setUIBusy(true);
           if (picked.length === 1) {
-            const steps = ['1/6: Extracting text', '2/6: OpenAI fields', '3/6: Slicing sections', '4/6: OpenAI embeddings', '5/6: Writing to Weaviate', '6/6: Reading back'];
+            const filePath = picked[0];
+            const basename = (filePath || '').toString().split(/[\\/]/).pop();
+            const isDocx = /\.docx$/i.test(basename);
+            const steps = [
+              `Extracting information from ${basename}: STEP 1/6: Read file & compute SHA`,
+              `Extracting information from ${basename}: STEP 2/6: Parse ${isDocx ? 'DOCX' : 'PDF'} text`,
+              `Extracting information from ${basename}: STEP 3/6: Extract role fields with OpenAI`,
+              `Extracting information from ${basename}: STEP 4/6: Slice text into sections`,
+              `Extracting information from ${basename}: STEP 5/6: Compute embeddings (doc + sections)`,
+              `Extracting information from ${basename}: STEP 6/6: Save to Weaviate and verify readback`,
+            ];
             let currentStep = 0;
             const pollInterval = setInterval(() => { if (currentStep < steps.length) { setStatus(steps[currentStep]); currentStep++; } }, 1500);
-            const r = await fetch('/api/roles/pipeline', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file: picked[0] }) });
+            const r = await fetch('/api/roles/pipeline', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file: filePath }) });
             clearInterval(pollInterval);
             const j = await r.json();
             if (!r.ok) throw new Error(j.error || 'Roles pipeline failed');
-            window.lastRoleExtractFieldsPath = picked[0];
+            window.lastRoleExtractFieldsPath = filePath;
             window.lastRoleExtractFieldsRow = fieldsToRoleRow(j.fields || {});
-            renderRoleDetailsForPath(picked[0]);
-            setStatus('Role pipeline completed. Displaying extracted fields.');
+            renderRoleDetailsForPath(filePath);
+            setStatus(`Extracting information from ${basename}: completed successfully`);
             await refreshRolesExtracted();
           } else {
             const startedAt = Date.now();
-            const fmtSec = (ms) => `(${Math.floor(ms/1000)} sec) ...`;
+            const fmtSec = (ms) => `${Math.floor(ms/1000)}s`;
             const timer = setInterval(async () => {
               try {
                 const r = await fetch('/api/roles/extract/progress', { cache: 'no-store' });
@@ -80,7 +90,7 @@ async function highlightRolesDuplicates(files) {
                 const j = await r.json();
                 const total = Number(j.total || 0);
                 const done = Number(j.done || 0);
-                setStatus(`extracted ${done} out of ${total} roles ${fmtSec(Date.now() - startedAt)}`);
+                setStatus(`Extracting information from batch (roles): processed ${done}/${total} files (elapsed ${fmtSec(Date.now() - startedAt)})`);
                 if (!j.active) clearInterval(timer);
               } catch (_) {}
             }, 500);
@@ -88,7 +98,7 @@ async function highlightRolesDuplicates(files) {
             const j = await r.json();
             if (!r.ok) throw new Error(j.error || 'Roles batch failed');
             await refreshRolesExtracted();
-            setStatus(`Batch completed: ${j.processed} processed, ${j.errors.length} errors.`);
+            setStatus(`Extracting information from batch (roles): completed — processed ${j.processed}, errors ${j.errors.length}.`);
           }
         } catch (e) {
           setStatus(`Error: ${e.message || e}`);
